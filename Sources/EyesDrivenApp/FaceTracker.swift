@@ -4,47 +4,73 @@ import EyesDrivenCore
 import Foundation
 import Vision
 
-/// Converts camera frames into `FaceFeatures` using Vision face landmarks.
+/// Converts camera frames into `FaceFeatures` with a two-stage Vision pipeline.
+///
+/// Stage 1 runs `VNDetectFaceRectanglesRequest` (revision 3) and keeps the
+/// largest face. That request is the only one that reports continuous head
+/// pose on macOS 27: `VNDetectFaceLandmarksRequest` returns yaw = 0, roll = 0
+/// and pitch = nil, so its pose is never trusted. Stage 2 runs
+/// `VNDetectFaceLandmarksRequest` on the same frame with
+/// `inputFaceObservations` set to that face to obtain the iris and eye
+/// contours.
+///
+/// Both requests go through the same reused `VNSequenceRequestHandler`. They
+/// are two independent (non-tracking) requests, so the handler's temporal
+/// sequence state is irrelevant; calling `perform` twice per frame reuses one
+/// handler instead of allocating a fresh one every frame. The landmarks
+/// request only starts once the rectangles result is known, so the two cannot
+/// be batched into a single `perform` call.
 ///
 /// Vision's landmark points (`VNFaceLandmarkRegion2D.normalizedPoints`) are used
 /// only as a *relative* space: the iris is normalized inside each eye contour's
 /// own bounding box and openness is the eye aspect ratio, so the absolute
 /// landmark coordinate space never leaks out. `faceCenter`/`faceSize` come from
-/// the observation's normalized bounding box. No frame data is written to disk
-/// or sent anywhere.
+/// the rectangles observation's normalized bounding box. No frame data is
+/// written to disk or sent anywhere.
 final class FaceTracker {
 
     private let sequenceHandler = VNSequenceRequestHandler()
-    private let request: VNDetectFaceLandmarksRequest
+    private let rectanglesRequest = VNDetectFaceRectanglesRequest()
+    private let landmarksRequest = VNDetectFaceLandmarksRequest()
 
     init() {
-        let request = VNDetectFaceLandmarksRequest()
-        request.revision = VNDetectFaceLandmarksRequest.currentRevision
-        self.request = request
+        rectanglesRequest.revision = VNDetectFaceRectanglesRequestRevision3
+        landmarksRequest.revision = VNDetectFaceLandmarksRequest.currentRevision
     }
 
-    /// Runs face-landmark detection on one frame and returns the features of the
-    /// largest detected face, or `nil` when there is no face or no landmarks.
+    /// Runs face detection on one frame and returns the features of the largest
+    /// detected face, or `nil` when there is no face or no landmarks.
     func process(_ sampleBuffer: CMSampleBuffer) -> FaceFeatures? {
         let presentation = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let timestamp = presentation.isNumeric ? CMTimeGetSeconds(presentation) : 0
 
+        // Stage 1: face rectangles, which carry continuous yaw/pitch/roll.
         do {
-            try sequenceHandler.perform([request], on: sampleBuffer)
+            try sequenceHandler.perform([rectanglesRequest], on: sampleBuffer)
         } catch {
             return nil
         }
+        guard let faces = rectanglesRequest.results, !faces.isEmpty,
+              let face = faces.max(by: { $0.boundingBox.width < $1.boundingBox.width })
+        else { return nil }
 
-        guard let observations = request.results, !observations.isEmpty else { return nil }
-        guard let face = observations.max(by: { $0.boundingBox.width < $1.boundingBox.width }) else {
+        // Stage 2: landmarks for the chosen face, on the same frame.
+        landmarksRequest.inputFaceObservations = [face]
+        do {
+            try sequenceHandler.perform([landmarksRequest], on: sampleBuffer)
+        } catch {
             return nil
         }
-        guard let landmarks = face.landmarks else { return nil }
+        guard let observation = landmarksRequest.results?.first,
+              let landmarks = observation.landmarks
+        else { return nil }
 
         let box = face.boundingBox
 
         return FaceFeatures(
             timestamp: timestamp,
+            // Pose comes from the rectangles observation; the landmark request
+            // never reports it. Landmark estimates are a last-resort fallback.
             yaw: radians(face.yaw) ?? estimateYaw(landmarks: landmarks),
             pitch: radians(face.pitch) ?? estimatePitch(landmarks: landmarks),
             roll: radians(face.roll) ?? 0,

@@ -9,7 +9,10 @@ import Foundation
 ///
 /// On macOS 14+ cooperative activation can ignore `NSRunningApplication.activate`
 /// when called from a background app, so setting the app element's
-/// `kAXFrontmostAttribute` is the primary path.
+/// `kAXFrontmostAttribute` is the primary path. The fallback `activate` is only
+/// attempted when that AX call fails, and never with `.activateAllWindows`:
+/// that option pulls every window of the target app over the user's split-screen
+/// layout.
 enum WindowFocuser {
 
     /// Whether this process is trusted for the Accessibility API.
@@ -17,25 +20,40 @@ enum WindowFocuser {
         AXIsProcessTrusted()
     }
 
-    /// Focuses `window`. Returns `true` when an AX window was raised or the app
-    /// was activated. When `moveCursor` is set, the mouse cursor is warped to
-    /// the window's center in CG global coordinates.
+    /// Focuses `window`. Returns `true` when any AX attribute or action actually
+    /// succeeded (or the app was activated as a fallback). When `moveCursor` is
+    /// set, the mouse cursor is warped to the window's center in CG global
+    /// coordinates.
     @discardableResult
     static func focus(_ window: WindowInfo, moveCursor: Bool) -> Bool {
         let app = AXUIElementCreateApplication(window.pid)
 
-        var raised = false
+        // Primary path: make the app frontmost via AX first, so the app does not
+        // bring a different window forward when we focus the matched window.
+        let frontmostSet = AXUIElementSetAttributeValue(
+            app, kAXFrontmostAttribute as CFString, kCFBooleanTrue
+        ) == .success
+
+        // Then raise and focus the specific window.
+        var windowSucceeded = false
         if let axWindow = matchWindow(for: window, in: app) {
-            _ = AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-            _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
-            raised = true
+            let mainSet = AXUIElementSetAttributeValue(
+                axWindow, kAXMainAttribute as CFString, kCFBooleanTrue
+            ) == .success
+            let focusedSet = AXUIElementSetAttributeValue(
+                axWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue
+            ) == .success
+            let raised = AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString) == .success
+            windowSucceeded = mainSet || focusedSet || raised
         }
 
-        // Primary activation path on macOS 14+.
-        _ = AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-
-        let activated = NSRunningApplication(processIdentifier: window.pid)?
-            .activate(from: .current, options: [.activateAllWindows]) ?? false
+        // Fallback activation only when the AX frontmost call failed. Empty
+        // options — never `.activateAllWindows`.
+        var activated = false
+        if !frontmostSet {
+            activated = NSRunningApplication(processIdentifier: window.pid)?
+                .activate(from: .current, options: []) ?? false
+        }
 
         if moveCursor {
             let center = CGPoint(x: window.frame.midX, y: window.frame.midY)
@@ -43,7 +61,7 @@ enum WindowFocuser {
             _ = CGAssociateMouseAndMouseCursorPosition(1)
         }
 
-        return raised || activated
+        return frontmostSet || windowSucceeded || activated
     }
 
     // MARK: - AX window matching
