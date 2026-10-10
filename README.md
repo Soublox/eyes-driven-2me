@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/icon.png" width="160" alt="Eyes Driven 2me icon"></p>
+
 # Eyes Driven 2me
 
 **Look at a window. It gets focus.**
