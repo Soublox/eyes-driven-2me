@@ -52,8 +52,14 @@ struct MenuBarContent: View {
         }
         .disabled(model.calibration.isCalibrating)
 
+        Button("Test gaze") {
+            model.startGazeDotTest()
+        }
+        .disabled(model.pipeline.calibrationState == .missing)
+
         Button("Settings…") {
             openWindow(id: "settings")
+            WindowActivation.activateAndRaise(titled: "Eyes Driven 2me Settings")
         }
 
         if model.pipeline.permissionProblem.contains(.camera) {

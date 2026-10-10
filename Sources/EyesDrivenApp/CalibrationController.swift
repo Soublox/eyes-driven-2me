@@ -932,9 +932,11 @@ final class CalibrationController: NSObject, ObservableObject {
         panel.isReleasedWhenClosed = false
         panel.contentView = container
         panel.center()
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         resultWindow = panel
+        // The app is an `.accessory` menu-bar app, so the panel would otherwise
+        // open behind other apps' windows. Raise it (and activate) explicitly.
+        WindowActivation.raise(panel)
+        WindowActivation.activateAndRaise(titled: "Calibration")
     }
 
     /// Human-readable result text: overall error, cross-validation error, the
@@ -987,6 +989,8 @@ final class CalibrationController: NSObject, ObservableObject {
     }
 
     @objc private func testPressed() {
+        // Close the panel first, then run the 15 s test (item C).
+        closeResultPanel()
         onTest?()
     }
 }

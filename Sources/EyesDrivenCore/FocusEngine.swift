@@ -56,6 +56,16 @@ public final class FocusEngine {
         cooldownUntil = max(cooldownUntil, timestamp + settings.cooldownSeconds)
     }
 
+    /// Forget any in-progress dwell and the last emitted highlight.
+    ///
+    /// Used when focus handling is suspended (for example while the app's own
+    /// Settings window is key) so that no half-finished dwell fires on resume
+    /// from a stale start timestamp.
+    public func reset() {
+        dwell.reset()
+        lastHighlight = nil
+    }
+
     /// Feed a filtered gaze point.
     public func ingest(gaze: CGPoint, at timestamp: TimeInterval) -> [FocusAction] {
         guard settings.isEnabled else { return disabledActions() }
@@ -64,13 +74,14 @@ public final class FocusEngine {
         let resolved = resolve(gaze)
         var actions: [FocusAction] = []
 
-        // The window the user is already typing in (frontmost) never
-        // accumulates dwell: highlight it with progress 0 and restart the dwell
+        // The window the user is already in (frontmost) never accumulates
+        // dwell: clear the border with highlight(nil, 0) and restart the dwell
         // from zero, so moving the gaze to another window does not inherit
-        // progress from the frontmost one (SPEC 3.8).
+        // progress from the frontmost one (SPEC 3.8). The same path runs right
+        // after `notifyFocused`, because the focused window is now frontmost.
         if let frontmost = resolved, frontmost.id == frontmostWindowID {
             dwell.reset()
-            appendHighlight(frontmost, progress: 0, into: &actions)
+            appendHighlight(nil, progress: 0, into: &actions)
             return actions
         }
 

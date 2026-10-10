@@ -190,9 +190,10 @@ Pure decision-maker, the only place combining the pieces above.
 - Rules:
   - Disabled settings → only `.highlight(nil, 0)` once, no focus.
   - Targets equal to the current frontmost window never fire, and do not
-    accumulate dwell progress (highlight it with progress 0, or nil when
-    `showTargetHighlight` would be noise) — the dwell restarts from zero when
-    the gaze moves to another window.
+    accumulate dwell progress: they emit `.highlight(nil, 0)`, clearing the
+    border because the user is already in that window. The dwell restarts from
+    zero when the gaze moves to another window. The same applies immediately
+    after `notifyFocused`, since the focused window is now frontmost.
   - `cooldown` (settings.cooldownSeconds, default 0.8 s) after any focus.
   - Nod: target = resolve(median gaze in `[start - 0.35, start - 0.05]`).
   - Trigger modes: `.dwell`, `.nod`, `.dwellOrNod`.

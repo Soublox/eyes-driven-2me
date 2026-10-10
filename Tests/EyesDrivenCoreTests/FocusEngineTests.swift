@@ -229,10 +229,10 @@ private func isClearing(_ action: FocusAction) -> Bool {
         t += 0.05
     }
     #expect(!actions.contains { isFocus($0) })
-    // Highlight may be emitted (frontmost target with progress 0) but never
-    // with a nonzero progress ring.
+    // Highlight may be emitted, but as a clear (nil, progress 0): the user is
+    // already in the frontmost window, so no border is drawn.
     #expect(progressValues.allSatisfy { $0 == 0 })
-    #expect(actions.contains { isHighlight($0) })
+    #expect(actions.contains { isClearing($0) })
 }
 
 /// Leaving the frontmost window restarts dwell from zero for the next one.
@@ -315,4 +315,112 @@ private func isClearing(_ action: FocusAction) -> Bool {
         t += 0.05
     }
     #expect(focusCount == 1)
+}
+
+// MARK: - Frontmost clears the border (SPEC 3.8, round 4)
+
+/// Looking at the already-focused (frontmost) window must clear the highlight
+/// rather than draw a border on the window the user is already in.
+@Test func gazeAtFrontmostClearsHighlight() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 1)
+
+    let actions = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: 0.0)
+    #expect(actions.contains { isClearing($0) })
+    // No highlight carries the frontmost window.
+    let highlightsWindow = actions.contains { action in
+        if case .highlight(let w, _) = action { return w != nil }
+        return false
+    }
+    #expect(!highlightsWindow)
+    #expect(!actions.contains { isFocus($0) })
+}
+
+/// After a focus fires and `notifyFocused` reports it, looking at the same
+/// window clears the border again (the focused window is now frontmost).
+@Test func gazeAtJustFocusedWindowClearsHighlight() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 42)
+
+    // Dwell until A is focused.
+    var t = 0.0
+    var focused = false
+    while t <= 0.6, !focused {
+        focused = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t).contains { isFocus($0, .dwell) }
+        t += 0.05
+    }
+    #expect(focused)
+
+    // The pipeline reports the focus back; A is now frontmost.
+    engine.notifyFocused(windowID: 1, at: t)
+
+    let after = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t + 0.05)
+    #expect(after.contains { isClearing($0) })
+    #expect(!after.contains { isFocus($0) })
+}
+
+/// Moving the gaze from the frontmost window to another window highlights that
+/// window and its dwell progress grows.
+@Test func movingFromFrontmostHighlightsOtherWindowWithProgress() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.4
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    let b = win(2, CGRect(x: 1000, y: 0, width: 800, height: 600))
+    engine.updateWindows([a, b], displays: [display], frontmostWindowID: 1)
+
+    // Look at the frontmost window A for a while: the border stays cleared.
+    var t = 0.0
+    while t <= 0.5 {
+        _ = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t)
+        t += 0.05
+    }
+
+    // Sweep to B: it is highlighted and its progress grows toward the dwell.
+    var sawB = false
+    var maxProgress = 0.0
+    while t <= 0.7 {
+        for action in engine.ingest(gaze: CGPoint(x: 1400, y: 300), at: t) {
+            if case .highlight(let w, let p) = action, w?.id == 2 {
+                sawB = true
+                maxProgress = max(maxProgress, p)
+            }
+        }
+        t += 0.05
+    }
+    #expect(sawB)
+    #expect(maxProgress > 0)
+}
+
+/// `reset()` forgets a half-finished dwell, so resuming after focus handling
+/// was suspended does not fire from a stale start timestamp.
+@Test func resetClearsInProgressDwell() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 1.0
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 42)
+
+    // Accumulate most of the dwell.
+    for t in stride(from: 0.0, through: 0.8, by: 0.1) {
+        _ = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t)
+    }
+    engine.reset()
+
+    // After a long pause the first frame restarts the dwell (no instant fire).
+    let actions = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: 12.0)
+    #expect(!actions.contains { isFocus($0) })
+    let progress = actions.compactMap { action -> Double? in
+        if case .highlight(let w, let p) = action, w?.id == 1 { return p }
+        return nil
+    }.first
+    #expect(progress == 0.0)
 }

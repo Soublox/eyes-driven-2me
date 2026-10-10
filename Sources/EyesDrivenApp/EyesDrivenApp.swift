@@ -21,9 +21,15 @@ final class AppModel: ObservableObject {
     let calibration: CalibrationController
 
     private var hotKey: HotKey?
-    /// Previous `showGazeDot` value while the calibration Test button is showing
-    /// the dot for 15 seconds.
+    /// Previous `showGazeDot` value while the 15 s gaze test is showing the dot.
     private var gazeDotTestRestore: Bool?
+    /// Repeating timer that updates the test-mode countdown label.
+    private var gazeDotTestTimer: Timer?
+    /// When the running gaze test ends.
+    private var gazeDotTestEnd: Date?
+
+    /// Length of the gaze-dot test, in seconds.
+    static let gazeDotTestSeconds = 15
 
     init() {
         let loaded = Storage.loadSettings()
@@ -91,18 +97,59 @@ final class AppModel: ObservableObject {
         calibration.start()
     }
 
-    /// Show the gaze dot for 15 seconds (the result panel's "Test" button), then
-    /// restore the previous `showGazeDot` value.
+    /// Show the large, high-contrast test gaze dot for 15 seconds with a
+    /// countdown label on the display the gaze point is on, then restore the
+    /// previous `showGazeDot` value. Used by the result panel's Test button and
+    /// by the menu bar's "Test gaze" item.
     func startGazeDotTest() {
         guard gazeDotTestRestore == nil else { return }
-        let previous = settings.showGazeDot
-        gazeDotTestRestore = previous
+        guard calibrationInfo() != nil else { return }
+
+        gazeDotTestRestore = settings.showGazeDot
+
+        // Ensure the camera runs and the overlay is visible so the test is
+        // unmistakable, even when tracking is paused.
         updateSettings { $0.showGazeDot = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self, let previous = self.gazeDotTestRestore else { return }
-            self.gazeDotTestRestore = nil
-            self.updateSettings { $0.showGazeDot = previous }
+        pipeline.beginGazeDotTest()
+        overlay.setVisible(true)
+        overlay.setGazeDotTest(active: true, label: testLabel(seconds: Self.gazeDotTestSeconds))
+
+        gazeDotTestEnd = Date().addingTimeInterval(TimeInterval(Self.gazeDotTestSeconds))
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.gazeDotTestTick() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        gazeDotTestTimer = timer
+    }
+
+    /// Advance the test countdown each second, ending the test at zero.
+    private func gazeDotTestTick() {
+        guard let end = gazeDotTestEnd, gazeDotTestRestore != nil else { return }
+        let remaining = Int(ceil(end.timeIntervalSinceNow))
+        if remaining <= 0 {
+            endGazeDotTest()
+        } else {
+            overlay.setGazeDotTest(active: true, label: testLabel(seconds: remaining))
+        }
+    }
+
+    /// Stop the test, remove the label and restore the previous dot setting.
+    private func endGazeDotTest() {
+        guard let previousDot = gazeDotTestRestore else { return }
+        gazeDotTestRestore = nil
+        gazeDotTestEnd = nil
+        gazeDotTestTimer?.invalidate()
+        gazeDotTestTimer = nil
+
+        overlay.setGazeDotTest(active: false, label: nil)
+        pipeline.endGazeDotTest()
+        updateSettings { $0.showGazeDot = previousDot }
+        overlay.setVisible(settings.isEnabled)
+    }
+
+    /// The floating test-mode label text for `seconds` remaining.
+    private func testLabel(seconds: Int) -> String {
+        "Test mode · \(seconds) s — look around; the dot should follow your eyes"
     }
 
     /// Date, mean error and staleness of the saved calibration, if any.

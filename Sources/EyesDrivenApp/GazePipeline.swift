@@ -62,6 +62,21 @@ final class GazePipeline: ObservableObject {
     /// happens. Used by `CalibrationController`.
     var calibrationSink: ((FaceFeatures) -> Void)?
 
+    /// While true, gaze and nods are not fed to the focus engine, so the app
+    /// never changes the focused window. Set from the Settings window's
+    /// `onAppear`/`onDisappear` so the user can work in Settings without the
+    /// app switching focus away from it.
+    var suspendFocusing = false {
+        didSet {
+            guard suspendFocusing != oldValue else { return }
+            if suspendFocusing {
+                engine.reset()
+                nodDetector.reset()
+                overlay?.update(target: nil, progress: 0)
+            }
+        }
+    }
+
     // MARK: - Internal state
 
     private var settings: AppSettings
@@ -76,6 +91,10 @@ final class GazePipeline: ObservableObject {
 
     private var cameraRunning = false
     private var calibrating = false
+    /// True during the 15 s gaze-dot test: the camera and gaze prediction run
+    /// even when tracking is disabled, so the dot can follow the eyes. The
+    /// focus engine still respects `settings.isEnabled`, so nothing is focused.
+    private var testingGazeDot = false
 
     private var frameCount = 0
     private var lastGazeTimestamp: TimeInterval = 0
@@ -168,6 +187,19 @@ final class GazePipeline: ObservableObject {
         updateCameraRunning()
     }
 
+    /// Start running the camera for the 15 s gaze-dot test even when tracking is
+    /// disabled (the focus engine stays disabled, so nothing is focused).
+    func beginGazeDotTest() {
+        testingGazeDot = true
+        updateCameraRunning()
+    }
+
+    /// Stop the test-only camera run.
+    func endGazeDotTest() {
+        testingGazeDot = false
+        updateCameraRunning()
+    }
+
     // MARK: - Frame handling
 
     private func handleScreenChange() {
@@ -208,7 +240,7 @@ final class GazePipeline: ObservableObject {
     // MARK: - Camera
 
     private func updateCameraRunning() {
-        let shouldRun = settings.isEnabled || calibrating
+        let shouldRun = settings.isEnabled || calibrating || testingGazeDot
         if shouldRun, !cameraRunning {
             startCamera()
         } else if !shouldRun, cameraRunning {
@@ -277,12 +309,16 @@ final class GazePipeline: ObservableObject {
             return
         }
 
-        guard settings.isEnabled, let model else { return }
+        guard settings.isEnabled || testingGazeDot, let model else { return }
 
         let raw = model.predict(features)
         let filtered = filter.filter(raw, at: features.timestamp)
         overlay?.update(gaze: filtered)
         lastGazeTimestamp = features.timestamp
+
+        // Suspended while our own Settings window is key: keep showing the gaze
+        // dot but never act on it, so the app cannot steal focus.
+        guard !suspendFocusing else { return }
 
         apply(engine.ingest(gaze: filtered, at: features.timestamp))
 

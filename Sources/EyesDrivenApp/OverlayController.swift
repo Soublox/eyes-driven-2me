@@ -28,6 +28,11 @@ final class OverlayController {
         var gazePoint: CGPoint?
         var showHighlight = true
         var showGazeDot = false
+        /// Whether the large, high-contrast test dot is drawn instead of the
+        /// 12 pt settings dot (menu / result-panel gaze test).
+        var testMode = false
+        /// The countdown label drawn near the top-center, or nil.
+        var testLabel: String?
 
         override var isOpaque: Bool { false }
 
@@ -40,6 +45,9 @@ final class OverlayController {
             }
             if showGazeDot, let gazePoint {
                 drawGazeDot(gazePoint)
+            }
+            if testMode, let testLabel {
+                drawTestLabel(testLabel)
             }
         }
 
@@ -76,7 +84,23 @@ final class OverlayController {
         }
 
         private func drawGazeDot(_ point: CGPoint) {
-            let diameter: CGFloat = 12
+            guard let context = NSGraphicsContext.current?.cgContext else { return }
+
+            // Test mode: a large, high-contrast dot in a color distinct from
+            // the (accent-colored) border, with a white ring and a soft shadow.
+            let diameter: CGFloat = testMode ? 36 : 12
+            let fillColor = testMode ? NSColor.systemPink : NSColor.controlAccentColor
+            let ringColor = NSColor.white
+
+            if testMode {
+                context.saveGState()
+                context.setShadow(
+                    offset: CGSize(width: 0, height: -2),
+                    blur: 14,
+                    color: NSColor.black.withAlphaComponent(0.55).cgColor
+                )
+            }
+
             let dot = CGRect(
                 x: point.x - diameter / 2,
                 y: point.y - diameter / 2,
@@ -84,11 +108,41 @@ final class OverlayController {
                 height: diameter
             )
             let path = NSBezierPath(ovalIn: dot)
-            NSColor.controlAccentColor.withAlphaComponent(0.85).setFill()
+            fillColor.withAlphaComponent(testMode ? 1 : 0.85).setFill()
             path.fill()
-            path.lineWidth = 1.5
-            NSColor.white.withAlphaComponent(0.9).setStroke()
+            path.lineWidth = testMode ? 3 : 1.5
+            ringColor.withAlphaComponent(testMode ? 1 : 0.9).setStroke()
             path.stroke()
+
+            if testMode {
+                context.restoreGState()
+            }
+        }
+
+        /// A small floating label near the top-center with a dark pill behind it
+        /// so it stays legible over any window.
+        private func drawTestLabel(_ text: String) {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 16, weight: .semibold),
+                .foregroundColor: NSColor.white,
+            ]
+            let string = NSAttributedString(string: text, attributes: attributes)
+            let size = string.size()
+            let padding = CGSize(width: 18, height: 9)
+            let origin = CGPoint(
+                x: (bounds.width - size.width) / 2,
+                y: bounds.maxY - size.height - 28
+            )
+            let box = CGRect(
+                x: origin.x - padding.width,
+                y: origin.y - padding.height,
+                width: size.width + padding.width * 2,
+                height: size.height + padding.height * 2
+            )
+            let pill = NSBezierPath(roundedRect: box, xRadius: 12, yRadius: 12)
+            NSColor.systemPink.withAlphaComponent(0.9).setFill()
+            pill.fill()
+            string.draw(at: origin)
         }
     }
 
@@ -111,6 +165,9 @@ final class OverlayController {
     private var progress: Double = 0
     private var showHighlight = true
     private var showGazeDot = false
+    private var triggerMode: TriggerMode = .dwellOrNod
+    private var testMode = false
+    private var testLabel: String?
     private var visible = false
     private var primaryHeight: CGFloat = 0
     private var screenObserver: NSObjectProtocol?
@@ -145,6 +202,16 @@ final class OverlayController {
     func apply(settings: AppSettings) {
         showHighlight = settings.showTargetHighlight
         showGazeDot = settings.showGazeDot
+        triggerMode = settings.triggerMode
+        refresh()
+    }
+
+    /// Turn the 15 s gaze test on or off. While on, the dot is drawn large and
+    /// high-contrast and `label` (the countdown text) floats near the top-center
+    /// of the display the gaze point is on. Pass `label: nil` to hide it.
+    func setGazeDotTest(active: Bool, label: String?) {
+        testMode = active
+        testLabel = label
         refresh()
     }
 
@@ -209,13 +276,38 @@ final class OverlayController {
     }
 
     private func refresh() {
-        for surface in surfaces {
+        // In test mode the countdown label follows the dot: draw it only on the
+        // display that contains the gaze point (the main display before there is
+        // a gaze point).
+        let testSurfaceIndex: Int? = {
+            guard testMode else { return nil }
+            guard let gaze else { return surfaces.isEmpty ? nil : 0 }
+            return surfaces.firstIndex { surface in
+                let point = ScreenGeometry.appKitPoint(
+                    fromCG: gaze,
+                    screenFrame: surface.screenFrame,
+                    primaryHeight: primaryHeight
+                )
+                return CGRect(origin: .zero, size: surface.screenFrame.size).contains(point)
+            }
+        }()
+
+        // Do not flash the border while the eyes just sweep across windows: in
+        // the dwell modes it appears only once the dwell is meaningfully in
+        // progress (nod-only mode always draws it).
+        let drawHighlight = showHighlight
+            && target != nil
+            && HighlightPolicy.shouldDraw(progress: progress, triggerMode: triggerMode)
+
+        for (index, surface) in surfaces.enumerated() {
             let view = surface.view
             view.showHighlight = showHighlight
             view.showGazeDot = showGazeDot
             view.progress = progress
+            view.testMode = testMode
+            view.testLabel = index == testSurfaceIndex ? testLabel : nil
 
-            if showHighlight, let target {
+            if drawHighlight, let target {
                 view.targetRect = ScreenGeometry.appKitRect(
                     fromCG: target.frame,
                     screenFrame: surface.screenFrame,

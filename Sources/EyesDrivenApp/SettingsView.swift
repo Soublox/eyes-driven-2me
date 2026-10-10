@@ -79,6 +79,22 @@ struct SettingsView: View {
         .onAppear {
             cameras = CameraCapture.availableCameras()
         }
+        // Do not let the app change the focused window while the user is
+        // working in Settings — but only while Settings is the key window, so
+        // leaving it open in the background does not silently disable tracking.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            if (note.object as? NSWindow)?.title == "Eyes Driven 2me Settings" {
+                model.pipeline.suspendFocusing = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            if (note.object as? NSWindow)?.title == "Eyes Driven 2me Settings" {
+                model.pipeline.suspendFocusing = false
+            }
+        }
+        .onDisappear {
+            model.pipeline.suspendFocusing = false
+        }
     }
 
     // MARK: - Calibration info
