@@ -14,6 +14,9 @@
 #                  for notarized releases later.
 #   SWIFT_BUILD    Build command override. Default "scripts/dev.sh build"
 #                  (the local toolchain wrapper). CI sets it to "swift build".
+#   ARCHS          Architectures to build. Default "arm64 x86_64" (universal
+#                  binary: Apple Silicon + Intel). Set ARCHS=arm64 for a faster
+#                  single-architecture local build.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -35,14 +38,25 @@ ZIP="dist/${APP_NAME}-${VERSION}.zip"
 
 # --- Build (release) -------------------------------------------------------
 read -r -a BUILD_CMD <<< "${SWIFT_BUILD:-scripts/dev.sh build}"
-echo "==> Building release (${BUILD_CMD[*]} -c release)"
-"${BUILD_CMD[@]}" -c release
-BIN_DIR="$("${BUILD_CMD[@]}" -c release --show-bin-path)"
+read -r -a ARCH_LIST <<< "${ARCHS:-arm64 x86_64}"
+ARCH_FLAGS=()
+for arch in "${ARCH_LIST[@]}"; do ARCH_FLAGS+=(--arch "$arch"); done
+echo "==> Building release for ${ARCH_LIST[*]} (${BUILD_CMD[*]} -c release ${ARCH_FLAGS[*]})"
+"${BUILD_CMD[@]}" -c release "${ARCH_FLAGS[@]}"
+BIN_DIR="$("${BUILD_CMD[@]}" -c release "${ARCH_FLAGS[@]}" --show-bin-path)"
 BINARY="${BIN_DIR}/${APP_NAME}"
 if [[ ! -x "$BINARY" ]]; then
   echo "error: built binary not found at ${BINARY}" >&2
   exit 1
 fi
+BUILT_ARCHS="$(lipo -archs "$BINARY")"
+for arch in "${ARCH_LIST[@]}"; do
+  if [[ " ${BUILT_ARCHS} " != *" ${arch} "* ]]; then
+    echo "error: ${BINARY} lacks ${arch} (has: ${BUILT_ARCHS})" >&2
+    exit 1
+  fi
+done
+echo "==> Architectures: ${BUILT_ARCHS}"
 
 # --- Assemble the bundle ---------------------------------------------------
 echo "==> Assembling ${APP}"

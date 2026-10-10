@@ -29,6 +29,9 @@ jobs:
           SWIFT_BUILD: swift build
         run: scripts/bundle.sh
 
+      - name: Check universal binary
+        run: lipo -archs dist/EyesDriven2me.app/Contents/MacOS/EyesDriven2me | grep -q "x86_64" && lipo -archs dist/EyesDriven2me.app/Contents/MacOS/EyesDriven2me | grep -q "arm64"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

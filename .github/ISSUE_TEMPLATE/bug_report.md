@@ -29,7 +29,8 @@ What you expected to happen instead.
 ## Environment
 
 - **macOS version**: (e.g. macOS 14.5, 15.1 — from  → About This Mac)
-- **Mac model**: (e.g. MacBook Pro 14" M3 Pro, Mac mini M2)
+- **Mac model and chip**: (e.g. MacBook Pro 14" M3 Pro, MacBook Pro 2019 Intel i7)
+- **Tracking fps** (Intel especially): output of `EyesDriven2me --camera --camera-seconds 5`
 - **Camera**: (built-in FaceTime camera, external model, virtual camera, …)
 - **Display layout**: (e.g. 3 displays side by side; built-in center + two 4K externals; resolutions and arrangement)
 - **Trigger mode**: (Dwell / Nod / Dwell or Nod)

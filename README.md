@@ -41,7 +41,13 @@ Nothing else happens — no clicking, no typing, no sending anything anywhere.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or newer — Apple Silicon or Intel.
+- macOS 14 (Sonoma) or newer.
+- Apple Silicon (recommended) or Intel — releases are universal binaries.
+  **Intel support is experimental:** Vision runs without the Neural Engine, so
+  tracking may run below 30 fps. Please report what you get:
+  `/Applications/EyesDriven2me.app/Contents/MacOS/EyesDriven2me --camera`
+  (prints fps per second) in an
+  [issue](https://github.com/Soublox/eyes-driven-2me/issues) with your Mac model.
 - A webcam (the built-in FaceTime camera works well).
 - **Camera** and **Accessibility** permissions.
 
