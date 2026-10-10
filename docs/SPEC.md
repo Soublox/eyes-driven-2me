@@ -101,6 +101,16 @@ are the average of both eyes.
 - Fit two independent ridge regressions (x and y) via normal equations
   `(XᵀX + λI)w = Xᵀy` (do not regularize the bias), solved with Cholesky or
   Gaussian elimination with partial pivoting. Pure Swift, no Accelerate.
+- **Model selection (anti-overfitting).** Real calibrations have few distinct
+  targets (e.g. 27) but many frames per target, and the full degree-2 basis has
+  36 terms. `fit` therefore selects the basis degree ∈ {1, 2} and
+  λ ∈ {0.01, 0.1, 1, 10, 100} by **leave-one-target-out cross-validation**
+  (samples sharing the same target point form one fold; error = mean Euclidean
+  distance in points) and refits the winner on all samples. Degree 2 is only
+  considered when there are at least 12 distinct targets. The chosen degree,
+  λ and CV error are stored on the model (`degree`, `lambda`, `crossValidationError`).
+- Calibration feeds **every collected frame** as a sample (not one median per
+  target), so the regression sees natural jitter.
 - `fit` throws `CalibrationError.notEnoughSamples` when fewer than 5 samples.
 - `predict(_:) -> CGPoint`, `meanError(on:) -> Double` (mean Euclidean
   distance in points).
@@ -136,6 +146,11 @@ Config defaults: `minAmplitude = 0.10 rad (~6°)`, `minDuration = 0.12 s`,
   `endTimestamp`.
 - An excursion that exceeds `maxDuration` is abandoned (user just looked down)
   and the baseline re-seeds.
+- A *pending* small excursion (above 25% of minAmplitude but never reaching
+  it) that lasts longer than `maxDuration` is a posture change, not a nod: the
+  baseline must resume tracking (re-seed to the current pitch). Otherwise a
+  user who simply looks at the bottom of a screen freezes the baseline and the
+  next real nod gets swallowed.
 - Upward-first motion never fires.
 - `reset()`.
 
@@ -146,8 +161,9 @@ Generic over `ID: Hashable`.
 - Fires once when the same target has been continuously observed for
   `duration`. Glitches shorter than `tolerance` (default 0.15 s) to another
   target or nil do not reset progress.
-- After firing it will not fire again for that target until the target changes
-  (then returns `.idle`/progress for the new one).
+- `.fired` is returned **exactly once** (on the crossing frame). Afterwards,
+  while the same target stays, the state is `.progressing(target, 1.0)`; it
+  will not fire again for that target until the target changes.
 - `reset()`.
 
 ### 3.7 `TargetResolver` (TargetResolver.swift)
@@ -173,7 +189,10 @@ Pure decision-maker, the only place combining the pieces above.
   - `.focus(WindowInfo, reason: .dwell | .nod)`.
 - Rules:
   - Disabled settings → only `.highlight(nil, 0)` once, no focus.
-  - Targets equal to the current frontmost window never fire.
+  - Targets equal to the current frontmost window never fire, and do not
+    accumulate dwell progress (highlight it with progress 0, or nil when
+    `showTargetHighlight` would be noise) — the dwell restarts from zero when
+    the gaze moves to another window.
   - `cooldown` (settings.cooldownSeconds, default 0.8 s) after any focus.
   - Nod: target = resolve(median gaze in `[start - 0.35, start - 0.05]`).
   - Trigger modes: `.dwell`, `.nod`, `.dwellOrNod`.
@@ -193,13 +212,13 @@ don't break old saved files.
 | File | Responsibility |
 |---|---|
 | `CameraCapture.swift` | `AVCaptureSession`, device selection by `uniqueID` (default: built-in FaceTime camera, else first video device), 640×480 or nearest, delivers `CMSampleBuffer` on a serial queue. `availableCameras()`. Start/stop. |
-| `FaceTracker.swift` | `VNDetectFaceLandmarksRequest` (latest revision) + `VNSequenceRequestHandler`; picks the largest face; produces `FaceFeatures`. Yaw/pitch/roll from the observation (radians); if nil, fallback estimates from landmarks (nose vs. face box). Iris = pupil position normalized within each eye contour bounding box. Eye openness = eye contour height / width. |
+| `FaceTracker.swift` | Two-stage Vision pipeline on a reused `VNSequenceRequestHandler`: (1) `VNDetectFaceRectanglesRequest` revision 3 provides continuous **yaw/pitch/roll** (the landmarks request returns yaw=0, roll=0, pitch=nil — verified on macOS 27); (2) `VNDetectFaceLandmarksRequest` with `inputFaceObservations` = the largest face. Landmark-based fallback only when the rectangles request has no pose. Iris = pupil position normalized within each eye contour bounding box. Eye openness = eye contour height / width. |
 | `WindowCatalog.swift` | `CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)` → `[WindowInfo]` front-to-back; `displays()` via `CGGetActiveDisplayList` + `CGDisplayBounds`; frontmost window id (first layer-0 window owned by `NSWorkspace.shared.frontmostApplication`). Window titles may be nil without Screen Recording permission — never required. |
-| `WindowFocuser.swift` | Focus a `WindowInfo` via AX: `AXUIElementCreateApplication(pid)`, find the AX window whose position/size match `frame` (±4 pt; prefer title match when available), `AXRaise`, set `kAXMainAttribute`, set app `kAXFrontmostAttribute = true`, then `NSRunningApplication.activate()` as a fallback. Optional cursor warp to the frame center (`CGWarpMouseCursorPosition` + `CGAssociateMouseAndMouseCursorPosition(1)`). Note: on macOS 14+ cooperative activation can ignore `activate()` from background apps — the AX frontmost attribute is the primary path. |
+| `WindowFocuser.swift` | Focus a `WindowInfo` via AX: `AXUIElementCreateApplication(pid)`, find the AX window whose position/size match `frame` (±4 pt; prefer title match when available). Order matters: set app `kAXFrontmostAttribute = true` first, then on the window set `kAXMainAttribute`, `kAXFocusedAttribute` and perform `AXRaise` (so the app does not bring a different window forward). `NSRunningApplication.activate()` only as a fallback when the AX frontmost call fails, and **never** with `.activateAllWindows` (that would pull every window of the app over the user's split layout). Optional cursor warp to the frame center (`CGWarpMouseCursorPosition` + `CGAssociateMouseAndMouseCursorPosition(1)`). Note: on macOS 14+ cooperative activation can ignore `activate()` from background apps — the AX frontmost attribute is the primary path. |
 | `Permissions.swift` | Camera (`AVCaptureDevice`), Accessibility (`AXIsProcessTrustedWithOptions`); helpers to open the right System Settings panes. |
 | `HotKey.swift` | Carbon `RegisterEventHotKey` global hotkey (no permission needed), default `⌃⌥⌘E`, callback on main thread. |
 | `GazePipeline.swift` | Glue: camera → tracker → model → filter → history → FocusEngine → focuser/overlay. Owns the `NodDetector`. Refreshes the window snapshot at ~4 Hz on the main thread. Publishes status (fps, face detected, current target) for the UI. |
-| `CalibrationController.swift` | Full-screen borderless window on every display; shows targets sequentially (5 per display: center + 4 points inset 12% from the edges); per target: 0.9 s settle, then 0.9 s collect; stores the per-feature median as one sample. Esc cancels. Fits `GazeModel`, shows mean error, saves `CalibrationProfile`. |
+| `CalibrationController.swift` | Full-screen borderless window on every display; shows targets sequentially (3×3 grid per display at 10% / 50% / 90% of width and height; order randomized within each display); per target: 0.8 s settle, then 1.0 s collect; every collected frame becomes a `CalibrationSample`. Esc cancels. Fits `GazeModel`, shows mean error, saves `CalibrationProfile`. |
 | `OverlayController.swift` | One click-through, transparent, borderless window per display at `.screenSaver` level, `ignoresMouseEvents = true`, joins all spaces; draws the target frame highlight with a dwell progress indicator and the optional gaze dot. |
 | `Storage.swift` | Persist `AppSettings` (UserDefaults, JSON) and `CalibrationProfile` (`~/Library/Application Support/EyesDriven2me/calibration.json`). |
 | `MenuBar.swift`, `SettingsView.swift`, `EyesDrivenApp.swift` | SwiftUI `MenuBarExtra` app (`@main`), activation policy `.accessory`. Menu: status line, Enabled toggle, trigger mode picker, Calibrate…, Settings…, Show gaze dot, Quit. |
