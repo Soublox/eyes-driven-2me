@@ -177,13 +177,17 @@ final class OverlayController {
         }
         primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         surfaces = NSScreen.screens.map { screen in
+            // NOTE: no `screen:` argument. With it, AppKit treats `contentRect`
+            // as relative to that screen and applies the screen origin twice
+            // (verified: a screen at x=-3840 produced a window at x=-7680).
+            // Pin the frame explicitly after creation as well.
             let window = OverlayWindow(
                 contentRect: screen.frame,
                 styleMask: .borderless,
                 backing: .buffered,
-                defer: false,
-                screen: screen
+                defer: false
             )
+            window.setFrame(screen.frame, display: false)
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = false
