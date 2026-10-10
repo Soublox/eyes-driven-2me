@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Camera access under the hardened runtime. The app is intentionally
+	     NOT sandboxed: the Accessibility API used to focus windows is not
+	     available inside the App Sandbox. -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+</dict>
+</plist>
