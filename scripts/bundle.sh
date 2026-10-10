@@ -7,9 +7,11 @@
 # Environment:
 #   VERSION        Version stamped into CFBundleShortVersionString.
 #                  Default: `git describe --tags --always`.
-#   SIGN_IDENTITY  codesign identity. Default "-" (ad-hoc). Set to a
-#                  "Developer ID Application: ..." identity for notarized
-#                  releases later.
+#   SIGN_IDENTITY  codesign identity. Default: the local self-signed identity
+#                  "EyesDriven2me Local Signing" when it exists in the keychain
+#                  (see scripts/create-local-signing-identity.sh), otherwise "-"
+#                  (ad-hoc). Set to a "Developer ID Application: ..." identity
+#                  for notarized releases later.
 #   SWIFT_BUILD    Build command override. Default "scripts/dev.sh build"
 #                  (the local toolchain wrapper). CI sets it to "swift build".
 set -euo pipefail
@@ -58,7 +60,14 @@ fi
 plist_set "CFBundleShortVersionString" "$VERSION" "${CONTENTS}/Info.plist"
 
 # --- Sign (hardened runtime, ad-hoc by default) ----------------------------
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+LOCAL_IDENTITY="EyesDriven2me Local Signing"
+if [[ -z "${SIGN_IDENTITY:-}" ]]; then
+  # A stable identity keeps macOS privacy permissions (Accessibility, Camera)
+  # across rebuilds; ad-hoc signatures change on every build and lose them.
+  LOCAL_HASH="$(security find-identity -p codesigning 2>/dev/null \
+    | awk -v name="\"${LOCAL_IDENTITY}\"" 'index($0, name) { print $2; exit }')"
+  SIGN_IDENTITY="${LOCAL_HASH:--}"
+fi
 echo "==> Signing with identity '${SIGN_IDENTITY}'"
 codesign --force --deep --sign "$SIGN_IDENTITY" \
   --options runtime \

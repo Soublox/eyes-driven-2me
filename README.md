@@ -96,6 +96,23 @@ scripts/bundle.sh         # release .app + zip in dist/
 > `swift test` needs Xcode or a swift.org toolchain — the plain Command Line
 > Tools do not ship the `Testing` module. `scripts/dev.sh` handles this.
 
+### Keep permissions across rebuilds
+
+Ad-hoc signed builds get a new identity every time, so macOS forgets the
+Accessibility permission after each rebuild. Create a local self-signed
+signing identity once:
+
+```sh
+scripts/create-local-signing-identity.sh
+```
+
+`scripts/bundle.sh` then signs with it automatically. Grant Accessibility one
+last time; later rebuilds keep it. (Local development only — public releases
+will use a Developer ID certificate and notarization.)
+
+Useful diagnostics: `EyesDriven2me --help` (`--windows`, `--camera`, `--gaze`,
+`--focus <id>`).
+
 ## Roadmap
 
 - Blink trigger (long or double blink).
