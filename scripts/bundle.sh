@@ -6,6 +6,7 @@
 #
 # Environment:
 #   VERSION        Version stamped into CFBundleShortVersionString.
+#   BUILD_NUMBER   Stamped into CFBundleVersion (CI passes the run number).
 #                  Default: `git describe --tags --always`.
 #   SIGN_IDENTITY  codesign identity. Default: the local self-signed identity
 #                  "EyesDriven2me Local Signing" when it exists in the keychain
@@ -81,6 +82,9 @@ if [[ -f Resources/AppIcon.icns ]]; then
 fi
 
 plist_set "CFBundleShortVersionString" "$VERSION" "${CONTENTS}/Info.plist"
+if [[ -n "${BUILD_NUMBER:-}" ]]; then
+  plist_set "CFBundleVersion" "$BUILD_NUMBER" "${CONTENTS}/Info.plist"
+fi
 
 # --- Sign (hardened runtime, ad-hoc by default) ----------------------------
 LOCAL_IDENTITY="EyesDriven2me Local Signing"
@@ -104,6 +108,7 @@ codesign --verify --verbose "$APP"
 # --- Zip -------------------------------------------------------------------
 echo "==> Zipping ${ZIP}"
 ditto -c -k --keepParent "$APP" "$ZIP"
+( cd dist && shasum -a 256 "$(basename "$ZIP")" > "$(basename "$ZIP").sha256" )
 
 echo
 echo "Done. Artifacts:"

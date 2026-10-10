@@ -1,12 +1,27 @@
 name: Release
 
+# Two ways to publish a release:
+#   1. Push a tag:            git tag v0.1.0 && git push origin v0.1.0
+#   2. Run this workflow from the Actions tab ("Run workflow") and type the
+#      version (e.g. 0.1.0). The workflow creates the v<version> tag itself.
+# Versions 0.x and versions with a suffix (0.2.0-beta.1) are pre-releases.
+
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v (e.g. 0.1.0 or 0.2.0-beta.1)"
+        required: true
+        type: string
 
-# Required so softprops/action-gh-release can create the release.
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -14,6 +29,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${INPUT_VERSION#v}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Invalid version '$VERSION' (expected MAJOR.MINOR.PATCH[-suffix])"
+            exit 1
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] && git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "::error::Tag v${VERSION} already exists"
+            exit 1
+          fi
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Release v${VERSION} already exists"
+            exit 1
+          fi
+          PRERELEASE=false
+          if [[ "$VERSION" == 0.* || "$VERSION" == *-* ]]; then PRERELEASE=true; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION (prerelease: $PRERELEASE)"
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app || true
@@ -21,24 +67,56 @@ jobs:
       - name: Swift version
         run: swift --version
 
-      - name: Build
-        run: swift build
-
       - name: Test
         run: swift test
 
-      - name: Bundle
+      - name: Bundle (universal)
         env:
           SWIFT_BUILD: swift build
-        run: VERSION="${GITHUB_REF_NAME#v}" scripts/bundle.sh
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/bundle.sh
 
-      # NOTE: Notarization will slot in here later. Once we hold a
-      # "Developer ID Application" certificate we will:
-      #   1. Import the cert + notarytool credentials as repository secrets.
-      #   2. Run scripts/bundle.sh with SIGN_IDENTITY set to that identity.
-      #   3. `xcrun notarytool submit dist/*.zip --wait` and `xcrun stapler staple`.
+      - name: Verify artifact
+        run: |
+          BIN=dist/EyesDriven2me.app/Contents/MacOS/EyesDriven2me
+          lipo -archs "$BIN" | grep -q x86_64
+          lipo -archs "$BIN" | grep -q arm64
+          codesign --verify --verbose dist/EyesDriven2me.app
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/EyesDriven2me.app/Contents/Info.plist
+          ls -la dist
+
+      - name: Release notes header
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > dist/notes.md <<EOF
+          ## Install
+
+          1. Download \`EyesDriven2me-${VERSION}.zip\`, unzip it and move **EyesDriven2me.app** to **/Applications**.
+          2. This build is not notarized yet, so the first time **right-click the app → Open → Open**
+             (or run \`xattr -dr com.apple.quarantine /Applications/EyesDriven2me.app\`).
+          3. Grant **Camera** and **Accessibility** access when asked, then choose **Calibrate…** in the menu bar.
+
+          Universal binary: Apple Silicon and Intel (Intel support is experimental). Requires macOS 14 or newer.
+          Verify the download: \`shasum -a 256 -c EyesDriven2me-${VERSION}.zip.sha256\`
+          EOF
+          sed -i '' 's/^          //' dist/notes.md
+
+      # Notarization will slot in here once a "Developer ID Application"
+      # certificate is available: import it + notarytool credentials from
+      # secrets, run bundle.sh with SIGN_IDENTITY, then
+      # `xcrun notarytool submit dist/*.zip --wait` and `xcrun stapler staple`.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Eyes Driven 2me ${{ steps.version.outputs.version }}
+          body_path: dist/notes.md
           generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          files: |
+            dist/EyesDriven2me-${{ steps.version.outputs.version }}.zip
+            dist/EyesDriven2me-${{ steps.version.outputs.version }}.zip.sha256
+          fail_on_unmatched_files: true
