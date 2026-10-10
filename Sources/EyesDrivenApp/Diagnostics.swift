@@ -15,6 +15,7 @@ enum Diagnostics {
       EyesDriven2me --windows                      Print displays and on-screen windows.
       EyesDriven2me --camera [--camera-seconds N]  Run the camera + face tracker (default 10 s).
       EyesDriven2me --focus <windowID>             Focus the window with the given id.
+      EyesDriven2me --gaze [--camera-seconds N]    Predict gaze with the saved calibration; print point, display and window.
       EyesDriven2me --help                         Print this help.
     """
 
@@ -33,6 +34,10 @@ enum Diagnostics {
         }
         if args.contains("--camera") {
             runCamera(seconds: cameraSeconds(in: args))
+            return true
+        }
+        if args.contains("--gaze") {
+            runGaze(seconds: cameraSeconds(in: args))
             return true
         }
         if let index = args.firstIndex(of: "--focus") {
@@ -77,6 +82,51 @@ enum Diagnostics {
                                  frame.origin.x, frame.origin.y, frame.width, frame.height)
             print("  id=\(window.id)  layer=\(window.layer)  pid=\(window.pid)  \(metrics)  \(window.appName) — \(title)")
         }
+    }
+
+    // MARK: - --gaze
+
+    /// Runs camera → tracker → saved GazeModel → PointFilter and prints, every
+    /// ~0.5 s, the filtered gaze point, the display it falls on and the window
+    /// `TargetResolver` would pick. Headless check of the full prediction path.
+    private static func runGaze(seconds: Double) {
+        guard let profile = Storage.loadCalibration() else {
+            print("No calibration saved. Calibrate from the menu first.")
+            return
+        }
+        let model = profile.model
+        print(String(format: "Model: degree %d, lambda %.2f, CV error %.0f pt, stale: %@",
+                     model.degree, model.lambda, model.crossValidationError,
+                     Storage.isStale(profile) ? "yes" : "no"))
+        let displays = WindowCatalog.displays()
+        let capture = CameraCapture()
+        let tracker = FaceTracker()
+        let lock = NSLock()
+        var latest: FaceFeatures?
+        capture.onFrame = { buffer in
+            let features = tracker.process(buffer)
+            lock.lock(); latest = features ?? latest; lock.unlock()
+        }
+        do { try capture.start(cameraUniqueID: nil) } catch {
+            print("Could not start the camera: \(error.localizedDescription)"); return
+        }
+        let filter = PointFilter()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { _ in
+            lock.lock(); let f = latest; lock.unlock()
+            guard let f else { print("  no face"); return }
+            let point = filter.filter(model.predict(f), at: f.timestamp)
+            let display = displays.firstIndex { $0.frame.contains(point) }
+                .map { "display \(displays[$0].id)" } ?? "off-screen"
+            let windows = WindowCatalog.windows()
+            let target = TargetResolver.resolve(point: point, windows: windows, displays: displays,
+                                                excludedPIDs: [getpid()])
+            print(String(format: "  gaze (%6.0f, %5.0f)  yaw %+.2f pitch %+.2f  %@  → %@",
+                         point.x, point.y, f.yaw, f.pitch, display, target?.appName ?? "-"))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        timer.invalidate()
+        capture.stop()
     }
 
     // MARK: - --camera
