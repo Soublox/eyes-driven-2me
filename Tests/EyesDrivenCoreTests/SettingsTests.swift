@@ -106,6 +106,22 @@ import Testing
     #expect(off.pauseWhenFaceCovered == false)
 }
 
+@Test func calibrationVoiceDefaultsOnAndDecodesTolerantly() throws {
+    // Default is on.
+    #expect(AppSettings().calibrationVoice == true)
+
+    // An old saved file without the key falls back to the default.
+    let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+    #expect(legacy.calibrationVoice == true)
+
+    // An explicit value is honored.
+    let off = try JSONDecoder().decode(
+        AppSettings.self,
+        from: Data(#"{"calibrationVoice": false}"#.utf8)
+    )
+    #expect(off.calibrationVoice == false)
+}
+
 @Test func roundTrip() throws {
     var s = AppSettings()
     s.isEnabled = false
@@ -117,6 +133,7 @@ import Testing
     s.showTargetHighlight = false
     s.showGazeDot = true
     s.calibrationSounds = false
+    s.calibrationVoice = false
     s.cameraUniqueID = "abc-123"
     s.hotKeyEnabled = false
     s.pauseOnMouseActivity = false

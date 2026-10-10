@@ -77,6 +77,7 @@ struct SettingsView: View {
             Section("Calibration") {
                 calibrationInfo
                 Toggle("Calibration sounds", isOn: calibrationSoundsBinding)
+                Toggle("Voice guidance", isOn: calibrationVoiceBinding)
                 Button("Recalibrate…") {
                     model.startCalibration()
                 }
@@ -195,6 +196,13 @@ struct SettingsView: View {
         Binding(
             get: { model.settings.calibrationSounds },
             set: { value in model.updateSettings { $0.calibrationSounds = value } }
+        )
+    }
+
+    private var calibrationVoiceBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.calibrationVoice },
+            set: { value in model.updateSettings { $0.calibrationVoice = value } }
         )
     }
 

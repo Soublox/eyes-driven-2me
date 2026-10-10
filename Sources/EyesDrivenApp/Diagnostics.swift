@@ -16,6 +16,7 @@ enum Diagnostics {
       EyesDriven2me --camera [--camera-seconds N]  Run the camera + face tracker (default 10 s).
       EyesDriven2me --focus <windowID>             Focus the window with the given id.
       EyesDriven2me --gaze [--camera-seconds N]    Predict gaze with the saved calibration; print point, display and window.
+      EyesDriven2me --say <key>                    Speak one guidance line and exit (checks the voice).
       EyesDriven2me --help                         Print this help.
     """
 
@@ -40,6 +41,10 @@ enum Diagnostics {
             runGaze(seconds: cameraSeconds(in: args))
             return true
         }
+        if args.contains("--say") {
+            runSay(args)
+            return true
+        }
         if let index = args.firstIndex(of: "--focus") {
             if index + 1 < args.count, let id = UInt32(args[index + 1]) {
                 runFocus(id: id)
@@ -60,6 +65,60 @@ enum Diagnostics {
               let seconds = Double(arguments[index + 1]), seconds > 0
         else { return 10 }
         return seconds
+    }
+
+    /// The integer value of `flag`, or nil when it is absent or malformed.
+    private static func intValue(_ flag: String, in arguments: [String]) -> Int? {
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+        return Int(arguments[index + 1])
+    }
+
+    // MARK: - --say
+
+    /// Speaks one calibration line and exits, so the voice and the localization
+    /// can be checked without running a full session. `--displays N` (default 3)
+    /// and `--display-index N` (default 1) shape the start / next-screen lines.
+    private static func runSay(_ arguments: [String]) {
+        guard let index = arguments.firstIndex(of: "--say"), index + 1 < arguments.count else {
+            print("--say needs a key. See --help.")
+            return
+        }
+        let key = arguments[index + 1]
+        let displays = intValue("--displays", in: arguments) ?? 3
+        let displayIndex = intValue("--display-index", in: arguments) ?? 1
+
+        guard let line = sayLine(key: key, displays: displays, displayIndex: displayIndex) else {
+            print("Unknown --say key '\(key)'. See --help for the accepted keys.")
+            return
+        }
+
+        let guide = VoiceGuide()
+        print("Speaking [\(VoiceGuide.preferredLanguage())]: \(line.text)")
+        var finished = false
+        guide.speak(line) { finished = true }
+        let deadline = Date().addingTimeInterval(15)
+        while !finished, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        print(finished ? "Done." : "Timed out.")
+    }
+
+    /// Map a `--say` key to a localized line, mirroring the calibration flow.
+    private static func sayLine(key: String, displays: Int, displayIndex: Int) -> VoiceLine? {
+        switch key {
+        case "start": return VoiceScript.start(displayCount: displays)
+        case "start.single": return VoiceScript.start(displayCount: 1)
+        case "nextScreen": return VoiceScript.nextScreen(displayIndex: displayIndex, count: displays)
+        case "almostDone": return VoiceScript.almostDone
+        case "finished.good": return VoiceScript.finished(errorPoints: 0)
+        case "finished.ok": return VoiceScript.finished(errorPoints: 200)
+        case "finished.poor": return VoiceScript.finished(errorPoints: 500)
+        case "hands": return VoiceScript.hands
+        case "paused": return VoiceScript.paused
+        case "resumed": return VoiceScript.resumed
+        case "cancelled": return VoiceScript.cancelled
+        default: return nil
+        }
     }
 
     // MARK: - --windows

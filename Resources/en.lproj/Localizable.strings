@@ -1,0 +1,24 @@
+/* Spoken calibration guidance (English).
+   Keys are selected by the pure `CalibrationScript` in Core; only the lines
+   that are spoken are localized for now. %d = 1-based screen number,
+   %@ = position phrase (voice.position.*). */
+
+"voice.start" = "Let's start. Look at screen %d, %@, and follow the dots.";
+"voice.start.single" = "Let's start. Follow the dots on the screen.";
+"voice.nextScreen" = "Now look at screen %d, %@.";
+
+"voice.position.left" = "on the left";
+"voice.position.center" = "in the center";
+"voice.position.right" = "on the right";
+"voice.position.only" = "";
+
+"voice.almostDone" = "We're almost done, just two more.";
+
+"voice.finished.good" = "Finished. Your calibration is good.";
+"voice.finished.ok" = "Finished. Your calibration is okay.";
+"voice.finished.poor" = "Finished. Your calibration is poor. Try better lighting and run it again.";
+
+"voice.hands" = "Keep your hands away from your face.";
+"voice.paused" = "Paused.";
+"voice.resumed" = "Resuming.";
+"voice.cancelled" = "Calibration cancelled.";

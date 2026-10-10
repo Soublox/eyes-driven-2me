@@ -23,6 +23,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var showGazeDot: Bool
     /// Play system sounds during calibration (ticks, start, target appear).
     public var calibrationSounds: Bool
+    /// Speak the calibration guidance (on-device voice; SPEC 4).
+    public var calibrationVoice: Bool
     /// Preferred camera device unique id, or nil for the default camera.
     public var cameraUniqueID: String?
     /// Whether the global hotkey is registered.
@@ -53,6 +55,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showTargetHighlight: Bool = true,
         showGazeDot: Bool = false,
         calibrationSounds: Bool = true,
+        calibrationVoice: Bool = true,
         cameraUniqueID: String? = nil,
         hotKeyEnabled: Bool = true,
         pauseOnMouseActivity: Bool = true,
@@ -69,6 +72,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showTargetHighlight = showTargetHighlight
         self.showGazeDot = showGazeDot
         self.calibrationSounds = calibrationSounds
+        self.calibrationVoice = calibrationVoice
         self.cameraUniqueID = cameraUniqueID
         self.hotKeyEnabled = hotKeyEnabled
         self.pauseOnMouseActivity = pauseOnMouseActivity
@@ -88,6 +92,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case showTargetHighlight
         case showGazeDot
         case calibrationSounds
+        case calibrationVoice
         case cameraUniqueID
         case hotKeyEnabled
         case pauseOnMouseActivity
@@ -107,6 +112,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showTargetHighlight = try c.decodeIfPresent(Bool.self, forKey: .showTargetHighlight) ?? true
         showGazeDot = try c.decodeIfPresent(Bool.self, forKey: .showGazeDot) ?? false
         calibrationSounds = try c.decodeIfPresent(Bool.self, forKey: .calibrationSounds) ?? true
+        calibrationVoice = try c.decodeIfPresent(Bool.self, forKey: .calibrationVoice) ?? true
         cameraUniqueID = try c.decodeIfPresent(String.self, forKey: .cameraUniqueID)
         hotKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotKeyEnabled) ?? true
         pauseOnMouseActivity = try c.decodeIfPresent(Bool.self, forKey: .pauseOnMouseActivity) ?? true

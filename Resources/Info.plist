@@ -10,6 +10,13 @@
 	<string>Eyes Driven 2me</string>
 	<key>CFBundleExecutable</key>
 	<string>EyesDriven2me</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>pt-BR</string>
+	</array>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

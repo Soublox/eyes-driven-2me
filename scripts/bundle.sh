@@ -51,6 +51,15 @@ mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 cp "$BINARY" "${CONTENTS}/MacOS/${APP_NAME}"
 cp Resources/Info.plist "${CONTENTS}/Info.plist"
 
+# --- Localizations ---------------------------------------------------------
+# Copy every `Resources/*.lproj` into Contents/Resources/ so `Bundle.main`
+# resolves the spoken guidance strings. Done before signing.
+echo "==> Copying localizations"
+for lproj in Resources/*.lproj; do
+  [[ -d "$lproj" ]] || continue
+  cp -R "$lproj" "${CONTENTS}/Resources/"
+done
+
 if [[ -f Resources/AppIcon.icns ]]; then
   echo "==> Adding app icon"
   cp Resources/AppIcon.icns "${CONTENTS}/Resources/AppIcon.icns"

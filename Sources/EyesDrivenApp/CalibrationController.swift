@@ -22,6 +22,15 @@ import QuartzCore
 /// end the samples are cleaned (per-target outliers removed), a `GazeModel` is
 /// fitted, a per-display quality report is computed and the profile is saved
 /// through `Storage`.
+///
+/// Spoken guidance (`VoiceGuide`, on-device `AVSpeechSynthesizer`) follows the
+/// app language: the opening line after Space names screen 1 and its position,
+/// each further screen is announced before its countdown (which waits for the
+/// line to finish), "almost done" is played once when two targets remain, a
+/// hands-off prompt at most once per 5 s, pause/resume and cancel lines, and a
+/// closing line with the quality. The lines are chosen by the pure
+/// `CalibrationScript` in Core. Toggled by `AppSettings.calibrationVoice`; when
+/// off, the flow is exactly as before.
 @MainActor
 final class CalibrationController: NSObject, ObservableObject {
 
@@ -62,6 +71,9 @@ final class CalibrationController: NSObject, ObservableObject {
     var onTest: (() -> Void)?
     /// Whether calibration sounds are enabled (from `AppSettings`).
     var soundsEnabled = true
+    /// Whether spoken guidance is enabled (from `AppSettings`). When off the
+    /// flow runs exactly as before, with no speech.
+    var voiceEnabled = true
 
     private enum Phase {
         case intro
@@ -397,6 +409,17 @@ final class CalibrationController: NSObject, ObservableObject {
     private var keyMonitor: Any?
     private var resultWindow: NSWindow?
 
+    /// On-device speech for the guided flow (nil-effect when `voiceEnabled` is off).
+    private let voice = VoiceGuide()
+    /// True between pressing Space on the intro and the opening line finishing.
+    private var sessionStarting = false
+    /// False while a countdown is waiting for its spoken line to finish.
+    private var countdownActive = false
+    /// The "almost done" line is announced at most once per session.
+    private var almostDoneAnnounced = false
+    /// Timestamp of the last hands-off warning, to rate-limit it to once per 5 s.
+    private var lastHandsWarning: CFTimeInterval = 0
+
     private let settleDuration: CFTimeInterval = 0.8
     private let collectDuration: CFTimeInterval = 1.0
     private let countdownDuration: CFTimeInterval = 3.0
@@ -437,6 +460,11 @@ final class CalibrationController: NSObject, ObservableObject {
         isPaused = false
         lastDisplayIndex = -1
         lastResult = nil
+        almostDoneAnnounced = false
+        sessionStarting = false
+        countdownActive = false
+        lastHandsWarning = 0
+        voice.stop()
 
         NSApp.activate(ignoringOtherApps: true)
         buildSurfaces()
@@ -457,6 +485,7 @@ final class CalibrationController: NSObject, ObservableObject {
         lastResult = nil
         teardown()
         closeResultPanel()
+        speak(VoiceScript.cancelled)
     }
 
     // MARK: - Targets
@@ -558,6 +587,8 @@ final class CalibrationController: NSObject, ObservableObject {
         activeSurface = nil
         paused = false
         isPaused = false
+        sessionStarting = false
+        countdownActive = false
 
         let mapSize = CGSize(width: 320, height: 160)
         let mapRects = CalibrationLayout.miniMap(displays: sortedDisplays, size: mapSize, padding: 4)
@@ -596,15 +627,33 @@ final class CalibrationController: NSObject, ObservableObject {
 
     private func beginCountdown(displayIndex: Int) {
         phase = .countdown
-        phaseStart = CACurrentMediaTime()
         paused = false
         isPaused = false
         currentSamples = []
         lastCountdownNumber = 0
+        countdownActive = false
         activeSurface = surface(forDisplayIndex: displayIndex)
         prepareSessionChrome(displayIndex: displayIndex)
-        updateCountdown()
         bringToKey(activeSurface)
+
+        if displayIndex == 0 {
+            // Screen 1 was already named by the opening line.
+            startCountdown()
+        } else {
+            // The countdown waits for the line to finish (item: spoken flow).
+            speak(VoiceScript.nextScreen(displayIndex: displayIndex, count: sortedDisplays.count)) { [weak self] in
+                self?.startCountdown()
+            }
+        }
+    }
+
+    /// Start the 3·2·1 countdown, once any spoken line has finished.
+    private func startCountdown() {
+        guard isCalibrating, phase == .countdown else { return }
+        countdownActive = true
+        phaseStart = CACurrentMediaTime()
+        lastCountdownNumber = 0
+        updateCountdown()
     }
 
     /// Dim the other displays and highlight the active one.
@@ -638,6 +687,15 @@ final class CalibrationController: NSObject, ObservableObject {
         phaseStart = CACurrentMediaTime()
         currentSamples = []
         play("Tink", volume: 0.4)
+
+        // "Almost done" is announced during the settle of the target that leaves
+        // exactly two remaining, once per session (allowed inside the collect
+        // window, so it is not tied to the settle completing).
+        let remaining = targets.count - index
+        if CalibrationScript.shouldAnnounceAlmostDone(remaining: remaining, alreadyAnnounced: almostDoneAnnounced) {
+            almostDoneAnnounced = true
+            speak(VoiceScript.almostDone)
+        }
 
         guard let surface = activeSurface else { return }
         let point = targets[index].point
@@ -675,6 +733,7 @@ final class CalibrationController: NSObject, ObservableObject {
                 activeSurface?.view.showTrackingHint = true
                 activeSurface?.view.needsDisplay = true
             }
+            announceHandsIfNeeded()
             return
         }
         if activeSurface?.view.showTrackingHint == true {
@@ -740,6 +799,7 @@ final class CalibrationController: NSObject, ObservableObject {
         case .intro:
             break
         case .countdown:
+            guard countdownActive else { break }
             updateCountdown()
             if elapsed >= countdownDuration {
                 lastDisplayIndex = activeSurface.flatMap(displayIndexOf(surface:)) ?? lastDisplayIndex
@@ -797,9 +857,22 @@ final class CalibrationController: NSObject, ObservableObject {
     private func handleSpace() {
         guard isCalibrating else { return }
         if phase == .intro {
-            startTargets()
+            startSession()
         } else {
             togglePause()
+        }
+    }
+
+    /// Speak the opening line, then begin the target loop when it finishes. With
+    /// voice guidance off the line completes immediately, so this is a no-op
+    /// delay (exactly the previous behaviour).
+    private func startSession() {
+        guard phase == .intro, !sessionStarting else { return }
+        sessionStarting = true
+        speak(VoiceScript.start(displayCount: sortedDisplays.count)) { [weak self] in
+            guard let self else { return }
+            self.sessionStarting = false
+            self.startTargets()
         }
     }
 
@@ -809,10 +882,18 @@ final class CalibrationController: NSObject, ObservableObject {
             phaseStart += CACurrentMediaTime() - pauseBegan
             paused = false
             isPaused = false
+            speak(VoiceScript.resumed)
+            // If the pause cut off a screen's spoken line before its countdown
+            // started, begin the countdown now.
+            if phase == .countdown, !countdownActive {
+                startCountdown()
+            }
         } else {
             paused = true
             pauseBegan = CACurrentMediaTime()
             isPaused = true
+            voice.stop()
+            speak(VoiceScript.paused)
         }
         for surface in surfaces {
             surface.view.paused = paused
@@ -831,6 +912,26 @@ final class CalibrationController: NSObject, ObservableObject {
             surface.view.paused = false
         }
         beginSettle()
+    }
+
+    // MARK: - Voice
+
+    /// Speak `line` through the on-device synthesizer. When voice guidance is
+    /// off, `completion` runs immediately so the flow proceeds unchanged.
+    private func speak(_ line: VoiceLine, completion: (() -> Void)? = nil) {
+        guard voiceEnabled else {
+            completion?()
+            return
+        }
+        voice.speak(line, completion: completion)
+    }
+
+    /// Warn about hands on the face / unstable tracking, at most once per 5 s.
+    private func announceHandsIfNeeded() {
+        let now = CACurrentMediaTime()
+        guard now - lastHandsWarning >= 5 else { return }
+        lastHandsWarning = now
+        speak(VoiceScript.hands)
     }
 
     // MARK: - Sounds
@@ -890,6 +991,9 @@ final class CalibrationController: NSObject, ObservableObject {
             pipeline?.reloadCalibration()
 
             let quality: Result.Quality = error < 150 ? .good : (error < 350 ? .ok : .poor)
+            if let line = VoiceScript.finished(errorPoints: error) {
+                speak(line)
+            }
             showResult(Result(
                 errorPoints: error,
                 quality: quality,
@@ -920,6 +1024,9 @@ final class CalibrationController: NSObject, ObservableObject {
         currentSamples = []
         paused = false
         isPaused = false
+        sessionStarting = false
+        countdownActive = false
+        voice.stop()
         isCalibrating = false
         onEnd?()
     }

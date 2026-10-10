@@ -1,0 +1,23 @@
+/* Falas da orientação por voz na calibração (Português do Brasil).
+   As chaves são escolhidas pelo `CalibrationScript` (Core, puro). %d = número
+   da tela (começa em 1), %@ = trecho de posição (voice.position.*). */
+
+"voice.start" = "Vamos iniciar. Olhe para a tela %d, %@, e siga os pontos.";
+"voice.start.single" = "Vamos iniciar. Siga os pontos na tela.";
+"voice.nextScreen" = "Agora olhe para a tela %d, %@.";
+
+"voice.position.left" = "à esquerda";
+"voice.position.center" = "no centro";
+"voice.position.right" = "à direita";
+"voice.position.only" = "";
+
+"voice.almostDone" = "Estamos quase acabando, só mais dois.";
+
+"voice.finished.good" = "Finalizado. Sua calibração ficou boa.";
+"voice.finished.ok" = "Finalizado. Sua calibração ficou razoável.";
+"voice.finished.poor" = "Finalizado. Sua calibração ficou ruim. Melhore a iluminação e tente de novo.";
+
+"voice.hands" = "Mantenha as mãos longe do rosto.";
+"voice.paused" = "Pausado.";
+"voice.resumed" = "Continuando.";
+"voice.cancelled" = "Calibração cancelada.";

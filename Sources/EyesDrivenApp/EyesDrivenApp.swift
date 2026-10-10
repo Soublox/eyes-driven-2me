@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
         pipeline = GazePipeline(settings: loaded)
         calibration = CalibrationController(pipeline: pipeline)
         calibration.soundsEnabled = loaded.calibrationSounds
+        calibration.voiceEnabled = loaded.calibrationVoice
         calibration.onRecalibrate = { [weak self] in self?.startCalibration() }
         calibration.onTest = { [weak self] in self?.startGazeDotTest() }
 
@@ -94,6 +95,7 @@ final class AppModel: ObservableObject {
         overlay.update(target: nil, progress: 0)
         overlay.update(gaze: nil)
         calibration.soundsEnabled = settings.calibrationSounds
+        calibration.voiceEnabled = settings.calibrationVoice
         calibration.start()
     }
 
