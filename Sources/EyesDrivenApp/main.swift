@@ -2,9 +2,9 @@ import Foundation
 
 // Eyes Driven 2me — process entry point.
 //
-// The diagnostic CLI lives in Diagnostics.swift. The SwiftUI menu-bar app will
-// replace the `print` fallback with its launch once it exists.
+// `EyesDriven2me --help` lists the CLI diagnostics (Diagnostics.swift).
+// Without a diagnostic flag the SwiftUI menu-bar app starts.
 
 if !Diagnostics.runIfRequested(CommandLine.arguments) {
-    print(Diagnostics.usage)
+    EyesDrivenApp.main()
 }
