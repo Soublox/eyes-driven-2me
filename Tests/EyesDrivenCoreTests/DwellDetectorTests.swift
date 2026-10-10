@@ -47,9 +47,12 @@ import Testing
 @Test func noRefireOnSameTarget() {
     var d = DwellDetector<Int>(duration: 1.0, tolerance: 0.15)
     _ = d.update(target: 1, timestamp: 0.0)
+    // Fires exactly once on the crossing frame...
     #expect(d.update(target: 1, timestamp: 1.0) == .fired(1))
-    #expect(d.update(target: 1, timestamp: 1.5) == .fired(1))
-    #expect(d.update(target: 1, timestamp: 3.0) == .fired(1))
+    // ...then reports the completed dwell at 1.0 (SPEC 3.6), never firing again.
+    #expect(d.update(target: 1, timestamp: 1.5) == .progressing(1, 1.0))
+    #expect(d.update(target: 1, timestamp: 3.0) == .progressing(1, 1.0))
+    #expect(d.update(target: 1, timestamp: 10.0) == .progressing(1, 1.0))
 }
 
 @Test func refiresAfterSwitchingAwayAndBack() {

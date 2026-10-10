@@ -127,6 +127,18 @@ public final class NodDetector {
             pendingStart = nil
         }
 
+        // A pending excursion that never reaches minAmplitude but lasts longer
+        // than maxDuration is a posture change (e.g. the user staring at the
+        // bottom of a screen), not a nod: re-seed the baseline to the current
+        // pitch so the next real nod is measured from the new posture instead
+        // of being swallowed by a stale pending start (SPEC 3.5).
+        if let start = pendingStart, timestamp - start > config.maxDuration {
+            baseline = pitch
+            pendingStart = nil
+            lastTimestamp = timestamp
+            return nil
+        }
+
         if pastCooldown, excursion >= config.minAmplitude {
             monitoring = true
             peak = excursion

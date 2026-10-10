@@ -124,3 +124,45 @@ private func nodTrace(
     // A fresh detector on the same trace fires once.
     #expect(run(detector, again).count == 1)
 }
+
+/// Regression: a small posture change (excursion between 25% and 100% of
+/// minAmplitude) that persists longer than maxDuration must re-seed the
+/// baseline. Otherwise the pending excursion freezes the baseline and the next
+/// real nod starts with a stale `activeStart`, immediately exceeds maxDuration
+/// and is dropped (SPEC 3.5).
+@Test func postureChangeDoesNotSwallowTheNextNod() {
+    let detector = NodDetector()
+    var samples: [(TimeInterval, Double)] = []
+    var t = 0.0
+    // Settle at the baseline.
+    while t < 1.0 { samples.append((t, 0)); t += dt }
+
+    // Posture change: the user looks at the bottom of the screen (pitch shifts
+    // by 0.04 rad = between 25% and 100% of minAmplitude) and holds it for 2 s.
+    let posture = -0.04
+    while t < 3.0 { samples.append((t, posture)); t += dt }
+
+    // A clean 0.2 rad nod measured from the new posture, down and back up.
+    let nodStart = t
+    let half = 0.2
+    while t < nodStart + half {
+        let s = (t - nodStart) / half
+        samples.append((t, posture - 0.2 * s)); t += dt
+    }
+    let upStart = t
+    while t < upStart + half {
+        let s = (t - upStart) / half
+        samples.append((t, posture - 0.2 * (1 - s))); t += dt
+    }
+    for _ in 0..<10 { samples.append((t, posture)); t += dt }
+
+    let events = run(detector, samples)
+    #expect(events.count == 1)
+    if let event = events.first {
+        // The start is the first frame past 25% of minAmplitude of *this* nod,
+        // not the old posture pending time.
+        #expect(event.startTimestamp >= nodStart - 1e-6)
+        #expect(event.startTimestamp <= nodStart + dt + 1e-6)
+        #expect(event.endTimestamp > event.startTimestamp)
+    }
+}

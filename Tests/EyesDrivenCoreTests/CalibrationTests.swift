@@ -102,6 +102,10 @@ private func makeSamples(count: Int, seed: UInt64) -> [CalibrationSample] {
         #expect(abs(a.y - b.y) < 1e-6)
     }
     #expect(decoded.pitchDownSign == model.pitchDownSign)
+    // The model-selection fields survive the round trip.
+    #expect(decoded.degree == model.degree)
+    #expect(decoded.lambda == model.lambda)
+    #expect(decoded.crossValidationError == model.crossValidationError)
 }
 
 @Test func pitchDownSignPositiveWhenPitchGrowsWithTargetY() throws {
@@ -158,4 +162,192 @@ private func makeSamples(count: Int, seed: UInt64) -> [CalibrationSample] {
     let xs = samples.map { Double($0.target.x) }
     #expect(xs.min()! < -3000)
     #expect(xs.max()! > 5000)
+}
+
+// MARK: - Model selection (SPEC 3.2)
+
+/// Deterministic SplitMix64 (Steele et al. 2014) with Box–Muller Gaussian
+/// draws, so these tests never touch `SystemRandomNumberGenerator`.
+private struct SplitMix64 {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+
+    private mutating func next() -> UInt64 {
+        state = state &+ 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+
+    /// Uniform in `[0, 1)`.
+    mutating func unit() -> Double { Double(next() >> 11) * 0x1.0p-53 }
+
+    /// Standard normal via the Box–Muller transform.
+    mutating func gaussian() -> Double {
+        let u1 = Swift.max(unit(), 1e-12)
+        let u2 = unit()
+        return (-2 * Foundation.log(u1)).squareRoot() * Foundation.cos(2 * Double.pi * u2)
+    }
+
+    mutating func normal(_ mean: Double, _ sd: Double) -> Double { mean + sd * gaussian() }
+}
+
+/// Ground truth for a *realistic* calibration: essentially linear in yaw/pitch,
+/// mapped across the reference three-display row (x ∈ roughly [-3840, 5416],
+/// y ∈ [0, 2160]). The quadratic curvature real webcams show is tiny compared
+/// with the per-frame feature noise, so a degree-2 basis buys nothing.
+private func realisticTarget(yaw: Double, pitch: Double) -> CGPoint {
+    let x = 788.0 + 9500.0 * yaw + 40.0 * yaw * yaw
+    let y = 1080.0 + 3000.0 * pitch + 15.0 * pitch * pitch
+    return CGPoint(x: x, y: y)
+}
+
+/// The 3×3 target grid on each of the three reference displays (27 targets).
+private func realisticGrid() -> [(yaw: Double, pitch: Double)] {
+    let displays: [(minX: Double, width: Double)] = [
+        (-3840, 3840),  // external left 4K
+        (0, 1728),      // MacBook built-in
+        (1728, 3688),   // external right 4K
+    ]
+    var out: [(yaw: Double, pitch: Double)] = []
+    for display in displays {
+        for fx in [0.1, 0.5, 0.9] {
+            for fy in [0.1, 0.5, 0.9] {
+                let x = display.minX + fx * display.width
+                let y = fy * 2160.0
+                out.append((yaw: (x - 788.0) / 9500.0, pitch: (y - 1080.0) / 3000.0))
+            }
+        }
+    }
+    return out
+}
+
+/// A second 3×3 grid on each display at different fractions, i.e. targets that
+/// were never part of the calibration grid.
+private func realisticGridOffGrid() -> [(yaw: Double, pitch: Double)] {
+    let displays: [(minX: Double, width: Double)] = [
+        (-3840, 3840), (0, 1728), (1728, 3688),
+    ]
+    var out: [(yaw: Double, pitch: Double)] = []
+    for display in displays {
+        for fx in [0.3, 0.7] {
+            for fy in [0.3, 0.7] {
+                let x = display.minX + fx * display.width
+                let y = fy * 2160.0
+                out.append((yaw: (x - 788.0) / 9500.0, pitch: (y - 1080.0) / 3000.0))
+            }
+        }
+    }
+    return out
+}
+
+/// One noisy per-frame observation for a given head pose. The true target
+/// depends mostly on yaw/pitch; iris and face-center features carry correlated
+/// but ultimately nuisance variation, exactly like a real webcam.
+private func realisticFrame(yaw: Double, pitch: Double, rng: inout SplitMix64) -> FaceFeatures {
+    let leftIris = CGPoint(
+        x: 0.5 + 0.20 * yaw + rng.normal(0, 0.02),
+        y: 0.5 + 0.20 * pitch + rng.normal(0, 0.02)
+    )
+    let rightIris = CGPoint(
+        x: 0.5 + 0.20 * yaw + rng.normal(0, 0.02),
+        y: 0.5 + 0.20 * pitch + rng.normal(0, 0.02)
+    )
+    return FaceFeatures(
+        timestamp: 0,
+        yaw: yaw + rng.normal(0, 0.008),
+        pitch: pitch + rng.normal(0, 0.008),
+        roll: rng.normal(0, 0.02),
+        leftIris: leftIris,
+        rightIris: rightIris,
+        leftEyeOpenness: 0.3,
+        rightEyeOpenness: 0.3,
+        faceCenter: CGPoint(
+            x: 0.5 + 0.15 * yaw + rng.normal(0, 0.02),
+            y: 0.5 + 0.15 * pitch + rng.normal(0, 0.02)
+        ),
+        faceSize: 0.3 + 0.05 * yaw + rng.normal(0, 0.02)
+    )
+}
+
+/// Mean Euclidean prediction error (points) of `model` over fresh noisy frames
+/// drawn for every target in `grid`.
+private func heldOutError(
+    _ model: GazeModel,
+    over grid: [(yaw: Double, pitch: Double)],
+    frames: Int,
+    seed: UInt64
+) -> Double {
+    var rng = SplitMix64(seed: seed)
+    var total = 0.0
+    var count = 0.0
+    for target in grid {
+        let point = realisticTarget(yaw: target.yaw, pitch: target.pitch)
+        for _ in 0..<frames {
+            let f = realisticFrame(yaw: target.yaw, pitch: target.pitch, rng: &rng)
+            let p = model.predict(f)
+            total += hypot(Double(p.x - point.x), Double(p.y - point.y))
+            count += 1
+        }
+    }
+    return total / count
+}
+
+/// Regression (critical): on a realistic 27-target calibration (25 noisy frames
+/// each) the CV-selected model must generalize to fresh noisy frames better than
+/// a forced degree-2/λ=0.01 model — both on the calibration targets and on
+/// targets that were never calibrated. The old code always returned the forced
+/// model, so the two errors were identical and both `<` comparisons failed.
+@Test func crossValidationPicksBetterModelThanForcedDegreeTwo() throws {
+    let grid = realisticGrid()
+    #expect(grid.count == 27)
+    #expect(Set(grid.map { "\($0.yaw),\($0.pitch)" }).count == 27)
+
+    var rng = SplitMix64(seed: 0x0A11CE_5EED)
+    var samples: [CalibrationSample] = []
+    for target in grid {
+        let point = realisticTarget(yaw: target.yaw, pitch: target.pitch)
+        for _ in 0..<25 {
+            samples.append(CalibrationSample(
+                features: realisticFrame(yaw: target.yaw, pitch: target.pitch, rng: &rng),
+                target: point
+            ))
+        }
+    }
+    // Sanity: the synthetic layout really spans the three-display x range.
+    let xs = samples.map { Double($0.target.x) }
+    #expect(xs.min()! < -3000)
+    #expect(xs.max()! > 5000)
+
+    let selected = try GazeModel.fit(samples: samples)
+    let forced = try GazeModel.fit(samples: samples, lambda: 0.01)
+
+    // Fresh noisy frames on the calibration targets.
+    #expect(heldOutError(selected, over: grid, frames: 25, seed: 0xFEED_FACE)
+        < heldOutError(forced, over: grid, frames: 25, seed: 0xFEED_FACE))
+
+    // Fresh noisy frames on targets that were never calibrated: the true test.
+    let offGrid = realisticGridOffGrid()
+    #expect(heldOutError(selected, over: offGrid, frames: 25, seed: 0xBEEF)
+        < heldOutError(forced, over: offGrid, frames: 25, seed: 0xBEEF))
+}
+
+/// With only 5 distinct targets the degree-2 basis is not even a candidate.
+@Test func fiveTargetsSelectDegreeOne() throws {
+    let grid = [
+        (yaw: -0.30, pitch: -0.20), (yaw: 0.00, pitch: 0.20), (yaw: 0.30, pitch: -0.20),
+        (yaw: -0.15, pitch: 0.25), (yaw: 0.15, pitch: 0.05),
+    ]
+    var rng = SplitMix64(seed: 0x5)
+    var samples: [CalibrationSample] = []
+    for target in grid {
+        let point = CGPoint(x: 500 + target.yaw * 5000, y: 1000 + target.pitch * 3000)
+        for _ in 0..<15 {
+            let f = realisticFrame(yaw: target.yaw, pitch: target.pitch, rng: &rng)
+            samples.append(CalibrationSample(features: f, target: point))
+        }
+    }
+    let model = try GazeModel.fit(samples: samples)
+    #expect(model.degree == 1)
 }

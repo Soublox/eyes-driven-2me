@@ -204,3 +204,115 @@ private func isClearing(_ action: FocusAction) -> Bool {
     }
     #expect(actions.contains { isFocus($0, .dwell) })
 }
+
+// MARK: - Frontmost dwell (SPEC 3.8)
+
+/// Regression: dwelling on the frontmost window must not accumulate progress.
+/// Before the fix the engine kept a completed dwell alive and, worse, carried
+/// the accumulated progress over to the next window.
+@Test func frontmostDwellDoesNotAccumulate() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 1)
+
+    var actions: [FocusAction] = []
+    var progressValues: [Double] = []
+    var t = 0.0
+    while t <= 1.2 {
+        for action in engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t) {
+            actions.append(action)
+            if case .highlight(_, let p) = action { progressValues.append(p) }
+        }
+        t += 0.05
+    }
+    #expect(!actions.contains { isFocus($0) })
+    // Highlight may be emitted (frontmost target with progress 0) but never
+    // with a nonzero progress ring.
+    #expect(progressValues.allSatisfy { $0 == 0 })
+    #expect(actions.contains { isHighlight($0) })
+}
+
+/// Leaving the frontmost window restarts dwell from zero for the next one.
+@Test func dwellRestartsWhenLeavingFrontmostWindow() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    let b = win(2, CGRect(x: 1000, y: 0, width: 800, height: 600))
+    engine.updateWindows([a, b], displays: [display], frontmostWindowID: 1)
+
+    // Spend far longer than the dwell time looking at the frontmost window A.
+    var t = 0.0
+    while t <= 1.0 {
+        _ = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t)
+        t += 0.05
+    }
+
+    // Move to B: the first highlight must report fresh (zero) progress.
+    let moved = engine.ingest(gaze: CGPoint(x: 1400, y: 300), at: t)
+    let firstProgress = moved.compactMap { action -> Double? in
+        if case .highlight(let w, let p) = action, w?.id == 2 { return p }
+        return nil
+    }.first
+    #expect(firstProgress == 0.0)
+
+    // And B still fires after a full dwell of its own.
+    var actions: [FocusAction] = []
+    while t <= 1.0 + 0.35 {
+        actions += engine.ingest(gaze: CGPoint(x: 1400, y: 300), at: t)
+        t += 0.05
+    }
+    #expect(actions.contains { isFocus($0, .dwell) })
+}
+
+/// After `notifyFocused(windowID:)` that window is frontmost, so looking at it
+/// must not progress or fire.
+@Test func windowFocusedViaNotifyDoesNotProgress() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 42)
+
+    engine.notifyFocused(windowID: 1, at: 0.0)
+
+    var actions: [FocusAction] = []
+    var progressValues: [Double] = []
+    var t = 0.05
+    while t <= 1.2 {
+        for action in engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t) {
+            actions.append(action)
+            if case .highlight(_, let p) = action { progressValues.append(p) }
+        }
+        t += 0.05
+    }
+    #expect(!actions.contains { isFocus($0) })
+    // The dwell never accumulates on the just-focused window.
+    #expect(progressValues.allSatisfy { $0 == 0 })
+}
+
+/// With the detector now firing exactly once, staying on a non-frontmost window
+/// focuses it a single time and never again.
+@Test func dwellFiresOnceWhileStaying() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 42)
+
+    var focusCount = 0
+    var t = 0.0
+    while t <= 2.0 {
+        for action in engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t) where isFocus(action) {
+            focusCount += 1
+        }
+        t += 0.05
+    }
+    #expect(focusCount == 1)
+}

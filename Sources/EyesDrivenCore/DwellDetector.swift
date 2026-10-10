@@ -78,12 +78,9 @@ public struct DwellDetector<ID: Hashable> {
     }
 
     private mutating func adopt(_ observation: Observation, at time: TimeInterval) {
-        switch observation {
-        case .window(let id):
-            if firedTarget != id { firedTarget = nil }
-        case .noTarget:
-            firedTarget = nil
-        }
+        // A new observation restarts everything, including the "already fired"
+        // memory, so re-acquiring this target later can fire again.
+        firedTarget = nil
         current = observation
         currentStart = time
     }
@@ -93,6 +90,9 @@ public struct DwellDetector<ID: Hashable> {
         let elapsed = max(time - currentStart, 0)
         let fraction = duration > 0 ? min(elapsed / duration, 1.0) : 1.0
         if fraction >= 1.0 {
+            // Fire exactly once on the crossing frame; afterwards report the
+            // completed dwell without firing again (SPEC 3.6).
+            if firedTarget == id { return .progressing(id, 1.0) }
             firedTarget = id
             return .fired(id)
         }

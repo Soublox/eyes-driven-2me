@@ -18,7 +18,6 @@ public final class FocusEngine {
     private var history: GazeHistory
 
     private var cooldownUntil: TimeInterval = -.infinity
-    private var lastFocusedDwellID: UInt32?
     private var lastHighlight: (id: UInt32?, progress: Double)?
     private var disabledHighlightEmitted = false
 
@@ -65,15 +64,22 @@ public final class FocusEngine {
         let resolved = resolve(gaze)
         var actions: [FocusAction] = []
 
+        // The window the user is already typing in (frontmost) never
+        // accumulates dwell: highlight it with progress 0 and restart the dwell
+        // from zero, so moving the gaze to another window does not inherit
+        // progress from the frontmost one (SPEC 3.8).
+        if let frontmost = resolved, frontmost.id == frontmostWindowID {
+            dwell.reset()
+            appendHighlight(frontmost, progress: 0, into: &actions)
+            return actions
+        }
+
         if settings.triggerMode == .nod {
             appendHighlight(resolved, progress: 0, into: &actions)
             return actions
         }
 
         let state = dwell.update(target: resolved?.id, timestamp: timestamp)
-
-        // A different target resets the "already focused this one" guard.
-        if resolved?.id != lastFocusedDwellID { lastFocusedDwellID = nil }
 
         let target: WindowInfo?
         let progress: Double
@@ -93,10 +99,15 @@ public final class FocusEngine {
 
         appendHighlight(target, progress: progress, into: &actions)
 
-        if let id = firedID,
-           let fired = window(id),
-           let action = attemptFocus(fired, at: timestamp, reason: .dwell, dwellID: id) {
-            actions.append(action)
+        if let id = firedID, let fired = window(id) {
+            if let action = attemptFocus(fired, at: timestamp, reason: .dwell) {
+                actions.append(action)
+            } else if timestamp < cooldownUntil {
+                // The dwell completed while the cooldown was still active.
+                // Restart it so the target focuses as soon as the cooldown
+                // elapses instead of losing the completed dwell (SPEC 3.8).
+                dwell.reset()
+            }
         }
         return actions
     }
@@ -138,15 +149,12 @@ public final class FocusEngine {
     private func attemptFocus(
         _ w: WindowInfo,
         at timestamp: TimeInterval,
-        reason: FocusReason,
-        dwellID: UInt32? = nil
+        reason: FocusReason
     ) -> FocusAction? {
         if let front = frontmostWindowID, w.id == front { return nil }
-        if reason == .dwell, let id = dwellID, id == lastFocusedDwellID { return nil }
         if timestamp < cooldownUntil { return nil }
 
         cooldownUntil = timestamp + settings.cooldownSeconds
-        if reason == .dwell { lastFocusedDwellID = dwellID }
         return .focus(w, reason: reason)
     }
 
