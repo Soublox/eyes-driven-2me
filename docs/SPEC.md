@@ -9,7 +9,7 @@ a **dwell** (keep looking for N seconds) or a **head nod** (one quick down-and-u
 "yes" movement).
 
 - Website: https://eyesdriven2.me (later)
-- Repository: https://github.com/soublox/eyes-driven-2me
+- Repository: https://github.com/Soublox/eyes-driven-2me
 - Platform: macOS 14 (Sonoma) or newer, Apple Silicon and Intel
 - License: MIT
 - Privacy: 100% on-device. No network access, no frames stored, ever.
