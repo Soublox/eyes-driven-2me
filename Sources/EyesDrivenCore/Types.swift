@@ -23,6 +23,15 @@ public struct FaceFeatures: Sendable, Equatable, Codable {
     public var faceCenter: CGPoint
     /// Face bounding box width normalized to image width (proxy for distance).
     public var faceSize: Double
+    /// Vision's confidence in the returned facial landmarks (`0...1`, default 1).
+    /// `VNFaceLandmarks2D.confidence`; lower when the face is partly occluded.
+    public var landmarksConfidence: Double
+    /// `VNDetectFaceCaptureQualityRequest` quality of the face (`0...1`), or nil
+    /// when the request is unavailable for the frame.
+    public var captureQuality: Double?
+    /// Fraction (`0...1`) of confidently recognized hand joints that fall inside
+    /// the face bounding box expanded by 20 %. 0 when no hand is seen.
+    public var handOverlap: Double
 
     public init(
         timestamp: TimeInterval,
@@ -34,7 +43,10 @@ public struct FaceFeatures: Sendable, Equatable, Codable {
         leftEyeOpenness: Double,
         rightEyeOpenness: Double,
         faceCenter: CGPoint,
-        faceSize: Double
+        faceSize: Double,
+        landmarksConfidence: Double = 1,
+        captureQuality: Double? = nil,
+        handOverlap: Double = 0
     ) {
         self.timestamp = timestamp
         self.yaw = yaw
@@ -46,6 +58,45 @@ public struct FaceFeatures: Sendable, Equatable, Codable {
         self.rightEyeOpenness = rightEyeOpenness
         self.faceCenter = faceCenter
         self.faceSize = faceSize
+        self.landmarksConfidence = landmarksConfidence
+        self.captureQuality = captureQuality
+        self.handOverlap = handOverlap
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp
+        case yaw
+        case pitch
+        case roll
+        case leftIris
+        case rightIris
+        case leftEyeOpenness
+        case rightEyeOpenness
+        case faceCenter
+        case faceSize
+        case landmarksConfidence
+        case captureQuality
+        case handOverlap
+    }
+
+    /// Tolerant decode: saved `calibration.json` files written before the
+    /// tracking-quality fields existed still decode, the new fields falling back
+    /// to their defaults (confidence 1, no capture quality, no hand overlap).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try c.decode(TimeInterval.self, forKey: .timestamp)
+        yaw = try c.decode(Double.self, forKey: .yaw)
+        pitch = try c.decode(Double.self, forKey: .pitch)
+        roll = try c.decode(Double.self, forKey: .roll)
+        leftIris = try c.decode(CGPoint.self, forKey: .leftIris)
+        rightIris = try c.decode(CGPoint.self, forKey: .rightIris)
+        leftEyeOpenness = try c.decode(Double.self, forKey: .leftEyeOpenness)
+        rightEyeOpenness = try c.decode(Double.self, forKey: .rightEyeOpenness)
+        faceCenter = try c.decode(CGPoint.self, forKey: .faceCenter)
+        faceSize = try c.decode(Double.self, forKey: .faceSize)
+        landmarksConfidence = try c.decodeIfPresent(Double.self, forKey: .landmarksConfidence) ?? 1
+        captureQuality = try c.decodeIfPresent(Double.self, forKey: .captureQuality)
+        handOverlap = try c.decodeIfPresent(Double.self, forKey: .handOverlap) ?? 0
     }
 
     /// Base feature vector for the gaze model:

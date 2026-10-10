@@ -134,8 +134,10 @@ enum Diagnostics {
     /// Runs the camera + face tracker for `seconds` and prints one aggregate line
     /// per second: mean and standard deviation of yaw, pitch and the per-eye
     /// averaged iris position, plus frames per second and the fraction of frames
-    /// that contained a face. This lets the reader confirm that yaw now varies
-    /// when the head turns and how noisy the iris signal is.
+    /// that contained a face. It also reports the tracking-quality signals (mean
+    /// landmarksConfidence, mean captureQuality, max handOverlap) and how often
+    /// the `TrackingQualityGate` marked frames unreliable, with the reasons seen.
+    /// This lets the reader tune the gate thresholds with real data.
     private static func runCamera(seconds: Double) {
         let capture = CameraCapture()
         let tracker = FaceTracker()
@@ -204,7 +206,8 @@ enum Diagnostics {
 // MARK: - Camera statistics
 
 /// Accumulates frames between one-second report windows, then computes the mean
-/// and standard deviation of the pose and iris signals for that window.
+/// and standard deviation of the pose and iris signals for that window, plus the
+/// tracking-quality signals and how often the gate marked frames unreliable.
 private final class CameraStats {
 
     private let lock = NSLock()
@@ -214,6 +217,14 @@ private final class CameraStats {
     private var pitch: [Double] = []
     private var irisX: [Double] = []
     private var irisY: [Double] = []
+    private var landmarks: [Double] = []
+    private var capture: [Double] = []
+    private var hand: [Double] = []
+
+    /// One gate instance for the whole run, so its hysteresis is contiguous.
+    private var gate = TrackingQualityGate()
+    private var unreliableFrames = 0
+    private var reasonsSeen: Set<TrackingQuality.Reason> = []
 
     /// Counts one frame (with or without a face) and records its features.
     func add(_ features: FaceFeatures?) {
@@ -227,6 +238,16 @@ private final class CameraStats {
         pitch.append(features.pitch)
         irisX.append(Double((features.leftIris.x + features.rightIris.x) / 2))
         irisY.append(Double((features.leftIris.y + features.rightIris.y) / 2))
+
+        landmarks.append(features.landmarksConfidence)
+        if let quality = features.captureQuality { capture.append(quality) }
+        hand.append(features.handOverlap)
+
+        let verdict = gate.process(features)
+        if !verdict.isReliable {
+            unreliableFrames += 1
+            reasonsSeen.formUnion(verdict.reasons)
+        }
     }
 
     /// Returns a one-line report for the just-finished window and resets it, or
@@ -242,14 +263,23 @@ private final class CameraStats {
         let pitchStat = Stats(pitch)
         let irisXStat = Stats(irisX)
         let irisYStat = Stats(irisY)
+        let landmarksStat = Stats(landmarks)
+        let captureStat = Stats(capture)
+        let handMax = hand.max() ?? 0
+        let unreliablePercent = faces > 0 ? Double(unreliableFrames) / Double(faces) * 100 : 0
+        let captureText = capture.isEmpty ? "n/a" : String(format: "%.2f", captureStat.mean)
+        let reasonsText = reasonsSeen.isEmpty
+            ? "-"
+            : reasonsSeen.map(\.rawValue).sorted().joined(separator: ",")
 
         let line = String(
-            format: "t=%2ds  fps=%3d  face=%3.0f%%  yaw mean=%+.3f std=%.3f  pitch mean=%+.3f std=%.3f  irisX mean=%.3f std=%.3f  irisY mean=%.3f std=%.3f",
+            format: "t=%2ds  fps=%3d  face=%3.0f%%  yaw mean=%+.3f std=%.3f  pitch mean=%+.3f std=%.3f  irisX mean=%.3f std=%.3f  irisY mean=%.3f std=%.3f  landmarks mean=%.2f  capture mean=%@  hand max=%.2f  unreliable=%3.0f%%  reasons=[%@]",
             second, frames, facePercent,
             yawStat.mean, yawStat.std,
             pitchStat.mean, pitchStat.std,
             irisXStat.mean, irisXStat.std,
-            irisYStat.mean, irisYStat.std
+            irisYStat.mean, irisYStat.std,
+            landmarksStat.mean, captureText, handMax, unreliablePercent, reasonsText
         )
 
         frames = 0
@@ -258,6 +288,11 @@ private final class CameraStats {
         pitch.removeAll(keepingCapacity: true)
         irisX.removeAll(keepingCapacity: true)
         irisY.removeAll(keepingCapacity: true)
+        landmarks.removeAll(keepingCapacity: true)
+        capture.removeAll(keepingCapacity: true)
+        hand.removeAll(keepingCapacity: true)
+        unreliableFrames = 0
+        reasonsSeen.removeAll()
 
         return line
     }

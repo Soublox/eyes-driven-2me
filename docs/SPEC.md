@@ -91,7 +91,11 @@ not change signatures without updating this spec).
 Per-frame measurements from `FaceTracker`. See Types.swift. `featureVector`
 returns the base vector used by the gaze model:
 `[yaw, pitch, irisX, irisY, faceCenterX, faceCenterY, faceSize]` where irisX/Y
-are the average of both eyes.
+are the average of both eyes. It also carries the tracking-quality signals used
+by `TrackingQualityGate` (SPEC 3.10): `landmarksConfidence`, `captureQuality`
+(optional) and `handOverlap`. The memberwise init defaults the new fields and a
+tolerant `init(from:)` lets `calibration.json` files saved before those fields
+still decode.
 
 ### 3.2 `GazeModel` (Calibration.swift)
 - Input: `[CalibrationSample]` (features + target point in global coords).
@@ -205,6 +209,12 @@ Pure decision-maker, the only place combining the pieces above.
     restarts from zero once input stops, and `.highlight(nil, 0)` is emitted
     (deduplicated like any other highlight). A nod that arrives while manual
     input is active is ignored.
+  - Tracking reliability (SPEC 3.10): `ingest(unreliableAt:)` is called instead
+    of the gaze/nod ingest while the gate marks tracking unreliable. It clears
+    the highlight (`.highlight(nil, 0)`, deduplicated) and resets the dwell
+    detector. The caller does not predict or feed gaze and nods while
+    unreliable, so no gaze history is appended and a nod cannot fire from
+    hand movement.
 
 ### 3.9 `AppSettings` (Settings.swift)
 `Codable, Equatable` with defaults:
@@ -214,25 +224,47 @@ Pure decision-maker, the only place combining the pieces above.
 `cooldownSeconds = 0.8`, `showTargetHighlight = true`, `showGazeDot = false`,
 `cameraUniqueID: String? = nil`, `hotKeyEnabled = true`,
 `pauseOnMouseActivity = true`, `pauseOnKeyboardActivity = true`,
-`manualInputQuietSeconds = 1.5` (clamped 0.3...5.0).
+`manualInputQuietSeconds = 1.5` (clamped 0.3...5.0),
+`pauseWhenFaceCovered = true` (pause focusing while a hand covers the face or
+tracking is unstable, SPEC 3.10; when off the gate still runs for calibration).
 Decoding must tolerate missing keys (fall back to defaults) so new settings
 don't break old saved files.
+
+### 3.10 `TrackingQualityGate` (TrackingQualityGate.swift)
+Pure hysteresis gate over the per-frame tracking-quality signals. A hand on the
+face occludes landmarks: pose and iris jump, which looks like a new gaze target
+(dwell fires) and like a nod.
+- `TrackingQualityGateConfig` defaults: `minLandmarksConfidence = 0.5`,
+  `minCaptureQuality = 0.25`, `maxHandOverlap = 0.15`, `maxYawPitchJump = 0.25`
+  rad, `recoverySeconds = 0.5`.
+- `process(_ features: FaceFeatures) -> TrackingQuality` where `TrackingQuality`
+  has `isReliable: Bool` and `reasons: Set<Reason>` with
+  `.lowLandmarkConfidence, .lowCaptureQuality, .handOnFace, .poseJump,
+  .recovering`.
+- Signals: `landmarksConfidence < min`; `captureQuality` (when non-nil) `< min`;
+  `handOverlap > max`; yaw or pitch change between consecutive frames greater
+  than `maxYawPitchJump` scaled by the frame gap relative to 1/30 s (ignored
+  when the gap exceeds 0.2 s).
+- Hysteresis: any failing signal makes tracking unreliable immediately and
+  restarts the recovery window; tracking is trusted again only after
+  `recoverySeconds` of consecutive clean frames (during which the reason is
+  `.recovering`). `reset()`.
 
 ## 4. App components (EyesDrivenApp)
 
 | File | Responsibility |
 |---|---|
 | `CameraCapture.swift` | `AVCaptureSession`, device selection by `uniqueID` (default: built-in FaceTime camera, else first video device), 640×480 or nearest, delivers `CMSampleBuffer` on a serial queue. `availableCameras()`. Start/stop. |
-| `FaceTracker.swift` | Two-stage Vision pipeline on a reused `VNSequenceRequestHandler`: (1) `VNDetectFaceRectanglesRequest` revision 3 provides continuous **yaw/pitch/roll** (the landmarks request returns yaw=0, roll=0, pitch=nil — verified on macOS 27); (2) `VNDetectFaceLandmarksRequest` with `inputFaceObservations` = the largest face. Landmark-based fallback only when the rectangles request has no pose. Iris = pupil position normalized within each eye contour bounding box. Eye openness = eye contour height / width. |
+| `FaceTracker.swift` | Two-stage Vision pipeline on a reused `VNSequenceRequestHandler`: (1) `VNDetectFaceRectanglesRequest` revision 3 provides continuous **yaw/pitch/roll** (the landmarks request returns yaw=0, roll=0, pitch=nil — verified on macOS 27); (2) `VNDetectFaceLandmarksRequest` with `inputFaceObservations` = the largest face. Landmark-based fallback only when the rectangles request has no pose. Iris = pupil position normalized within each eye contour bounding box. Eye openness = eye contour height / width. Also measures the tracking-quality signals (SPEC 3.10) on the same handler: `VNFaceLandmarks2D.confidence`; `VNDetectFaceCaptureQualityRequest` (revision 3, `inputFaceObservations` = the face) → `faceCaptureQuality`; and `VNDetectHumanHandPoseRequest` (`maximumHandCount = 2`, run on every second frame, the last value reused in between) → the fraction of hand joints with confidence > 0.3 inside the face box expanded by 20 %. |
 | `WindowCatalog.swift` | `CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)` → `[WindowInfo]` front-to-back; `displays()` via `CGGetActiveDisplayList` + `CGDisplayBounds`; frontmost window id (first layer-0 window owned by `NSWorkspace.shared.frontmostApplication`). Window titles may be nil without Screen Recording permission — never required. |
 | `WindowFocuser.swift` | Focus a `WindowInfo` via AX: `AXUIElementCreateApplication(pid)`, find the AX window whose position/size match `frame` (±4 pt; prefer title match when available). Order matters: set app `kAXFrontmostAttribute = true` first, then on the window set `kAXMainAttribute`, `kAXFocusedAttribute` and perform `AXRaise` (so the app does not bring a different window forward). `NSRunningApplication.activate()` only as a fallback when the AX frontmost call fails, and **never** with `.activateAllWindows` (that would pull every window of the app over the user's split layout). Optional cursor warp to the frame center (`CGWarpMouseCursorPosition` + `CGAssociateMouseAndMouseCursorPosition(1)`). Note: on macOS 14+ cooperative activation can ignore `activate()` from background apps — the AX frontmost attribute is the primary path. |
 | `Permissions.swift` | Camera (`AVCaptureDevice`), Accessibility (`AXIsProcessTrustedWithOptions`); helpers to open the right System Settings panes. |
 | `HotKey.swift` | Carbon `RegisterEventHotKey` global hotkey (no permission needed), default `⌃⌥⌘E`, callback on main thread. |
-| `GazePipeline.swift` | Glue: camera → tracker → model → filter → history → FocusEngine → focuser/overlay. Owns the `NodDetector`. Refreshes the window snapshot at ~4 Hz on the main thread. Polls `CGEventSource.secondsSinceLastEventType` per frame (mouse/keyboard, no extra permission) and feeds it to the engine so manual input pauses focus; publishes `manualInputActive` (SPEC 3.8/3.9). Publishes status (fps, face detected, current target) for the UI. |
-| `CalibrationController.swift` | Full-screen windows on every display (created **without** `NSWindow(..., screen:)`, which offsets the frame twice; use `setFrame(screen.frame)`). Flow: intro on the primary display (explanation + proportional mini-map of the display layout, Space to start) → per display, left to right: dim the others, accent border on the active one, centered 3·2·1 countdown with system sounds (Tink per second, Pop on start) → 3×3 targets (10/50/90%, shuffled within the display): 0.8 s settle (dot shrinks), 1.0 s collect (ring fills; first 0.15 s skipped), progress label "Screen i of n · Point j of 9". Keys: Space pause, R redo target, Esc cancel. Samples are cleaned with `CalibrationCleaner` (per-target MAD outliers on yaw/pitch) before `GazeModel.fit`. Result panel: CV error, per-display error, warning when two displays have indistinguishable head yaw (< 0.05 rad), buttons Done / Recalibrate / Test (gaze dot for 15 s). Sounds toggled by `AppSettings.calibrationSounds`. |
+| `GazePipeline.swift` | Glue: camera → tracker → model → filter → history → FocusEngine → focuser/overlay. Owns the `NodDetector` and the `TrackingQualityGate` (SPEC 3.10). Refreshes the window snapshot at ~4 Hz on the main thread. Polls `CGEventSource.secondsSinceLastEventType` per frame (mouse/keyboard, no extra permission) and feeds it to the engine so manual input pauses focus; publishes `manualInputActive` (SPEC 3.8/3.9). While `pauseWhenFaceCovered` is on and the gate marks the frame unreliable, it skips prediction/ingest, hides the gaze dot, calls `FocusEngine.ingest(unreliableAt:)`, resets the nod detector once on entering and publishes `trackingIssue` ("Paused · face partially covered" / "Paused · tracking unstable") for the menu. Publishes status (fps, face detected, current target) for the UI. |
+| `CalibrationController.swift` | Full-screen windows on every display (created **without** `NSWindow(..., screen:)`, which offsets the frame twice; use `setFrame(screen.frame)`). Flow: intro on the primary display (explanation + proportional mini-map of the display layout, Space to start) → per display, left to right: dim the others, accent border on the active one, centered 3·2·1 countdown with system sounds (Tink per second, Pop on start) → 3×3 targets (10/50/90%, shuffled within the display): 0.8 s settle (dot shrinks), 1.0 s collect (ring fills; first 0.15 s skipped), progress label "Screen i of n · Point j of 9". Keys: Space pause, R redo target, Esc cancel. Samples are cleaned with `CalibrationCleaner` (per-target MAD outliers on yaw/pitch) before `GazeModel.fit`. Frames the tracking-quality gate marks unreliable are not collected and the active display shows "Keep your hands away from your face" while they are being rejected. Result panel: CV error, per-display error, warning when two displays have indistinguishable head yaw (< 0.05 rad), buttons Done / Recalibrate / Test (gaze dot for 15 s). Sounds toggled by `AppSettings.calibrationSounds`. |
 | `OverlayController.swift` | One click-through, transparent, borderless window per display at `.screenSaver` level, `ignoresMouseEvents = true`, joins all spaces; draws the target frame highlight with a dwell progress indicator and the optional gaze dot. |
 | `Storage.swift` | Persist `AppSettings` (UserDefaults, JSON) and `CalibrationProfile` (`~/Library/Application Support/EyesDriven2me/calibration.json`). |
-| `MenuBar.swift`, `SettingsView.swift`, `EyesDrivenApp.swift` | SwiftUI `MenuBarExtra` app (`@main`), activation policy `.accessory`. Menu: status line (shows "Paused · mouse/keyboard in use" while manual input is active), Enabled toggle, trigger mode picker, Calibrate…, Settings…, Show gaze dot, Quit. Settings includes a "Manual input" section: pause-on-mouse / pause-on-typing toggles and the resume-after slider. |
+| `MenuBar.swift`, `SettingsView.swift`, `EyesDrivenApp.swift` | SwiftUI `MenuBarExtra` app (`@main`), activation policy `.accessory`. Menu: status line (shows "Paused · mouse/keyboard in use" while manual input is active), Enabled toggle, trigger mode picker, Calibrate…, Settings…, Show gaze dot, Quit. Settings includes a "Manual input" section: pause-on-mouse / pause-on-typing toggles and the resume-after slider, and a "Tracking" section with the "Pause when the face is covered or tracking is unstable" toggle (SPEC 3.10). The status line also shows the tracking issue while focusing is paused by the gate. |
 
 Info.plist (embedded in the binary via `-sectcreate` so `swift run` works, and
 copied into the `.app` by `scripts/bundle.sh`): `NSCameraUsageDescription`,

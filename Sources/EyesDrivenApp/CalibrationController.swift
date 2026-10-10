@@ -94,6 +94,8 @@ final class CalibrationController: NSObject, ObservableObject {
         var countdownProgress: CGFloat = 0
         /// "Screen 2 of 3 · Point 4 of 9".
         var progressLabel: String?
+        /// Shown while the tracking-quality gate rejects calibration frames.
+        var showTrackingHint = false
         var paused = false
         /// Intro screen content is drawn only on the primary display.
         var introVisible = false
@@ -115,6 +117,7 @@ final class CalibrationController: NSObject, ObservableObject {
             countdownNumber = nil
             countdownProgress = 0
             progressLabel = nil
+            showTrackingHint = false
             paused = false
             introVisible = false
             miniMapRects = []
@@ -254,6 +257,24 @@ final class CalibrationController: NSObject, ObservableObject {
             )
             let hintSize = hint.size()
             hint.draw(at: CGPoint(x: (bounds.width - hintSize.width) / 2, y: 40))
+
+            if showTrackingHint {
+                drawTrackingHint()
+            }
+        }
+
+        /// Small prompt shown while the gate rejects frames (hand on the face).
+        private func drawTrackingHint() {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 15, weight: .medium),
+                .foregroundColor: NSColor.systemYellow.withAlphaComponent(0.95),
+            ]
+            let string = NSAttributedString(
+                string: "Keep your hands away from your face",
+                attributes: attributes
+            )
+            let size = string.size()
+            string.draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: 70))
         }
 
         private func drawCountdown(_ number: Int) {
@@ -423,8 +444,8 @@ final class CalibrationController: NSObject, ObservableObject {
         showIntro()
         installKeyMonitor()
 
-        pipeline?.calibrationSink = { [weak self] features in
-            self?.receive(features)
+        pipeline?.calibrationSink = { [weak self] features, reliable in
+            self?.receive(features, reliable: reliable)
         }
         pipeline?.beginCalibration()
         startTimer()
@@ -628,6 +649,7 @@ final class CalibrationController: NSObject, ObservableObject {
         surface.view.dotRadius = 26
         surface.view.collectProgress = nil
         surface.view.countdownNumber = nil
+        surface.view.showTrackingHint = false
         surface.view.progressLabel = progressLabel()
         surface.view.needsDisplay = true
     }
@@ -638,11 +660,28 @@ final class CalibrationController: NSObject, ObservableObject {
         collectStart = phaseStart
         currentSamples = []
         activeSurface?.view.collectProgress = 0
+        activeSurface?.view.showTrackingHint = false
         activeSurface?.view.needsDisplay = true
     }
 
-    private func receive(_ features: FaceFeatures) {
+    private func receive(_ features: FaceFeatures, reliable: Bool) {
         guard isCalibrating, !paused, phase == .collect, index < targets.count else { return }
+
+        // Frames the tracking-quality gate marks unreliable (hand on the face,
+        // unstable tracking) are never collected. A target that ends with too
+        // few good frames is retried; while rejecting, prompt the user.
+        if !reliable {
+            if activeSurface?.view.showTrackingHint != true {
+                activeSurface?.view.showTrackingHint = true
+                activeSurface?.view.needsDisplay = true
+            }
+            return
+        }
+        if activeSurface?.view.showTrackingHint == true {
+            activeSurface?.view.showTrackingHint = false
+            activeSurface?.view.needsDisplay = true
+        }
+
         guard CACurrentMediaTime() - collectStart >= collectSkip else { return }
         currentSamples.append(CalibrationSample(features: features, target: targets[index].point))
     }

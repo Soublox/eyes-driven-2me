@@ -90,6 +90,22 @@ import Testing
     #expect(off.calibrationSounds == false)
 }
 
+@Test func pauseWhenFaceCoveredDefaultsOnAndDecodesTolerantly() throws {
+    // Default is on.
+    #expect(AppSettings().pauseWhenFaceCovered == true)
+
+    // An old saved file without the key falls back to the default.
+    let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+    #expect(legacy.pauseWhenFaceCovered == true)
+
+    // An explicit value is honored.
+    let off = try JSONDecoder().decode(
+        AppSettings.self,
+        from: Data(#"{"pauseWhenFaceCovered": false}"#.utf8)
+    )
+    #expect(off.pauseWhenFaceCovered == false)
+}
+
 @Test func roundTrip() throws {
     var s = AppSettings()
     s.isEnabled = false
@@ -106,6 +122,7 @@ import Testing
     s.pauseOnMouseActivity = false
     s.pauseOnKeyboardActivity = false
     s.manualInputQuietSeconds = 2.5
+    s.pauseWhenFaceCovered = false
 
     let data = try JSONEncoder().encode(s)
     let decoded = try JSONDecoder().decode(AppSettings.self, from: data)

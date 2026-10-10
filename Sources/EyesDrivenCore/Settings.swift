@@ -33,6 +33,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var pauseOnKeyboardActivity: Bool
     /// Seconds of no manual input before focus resumes (clamped to `manualInputQuietSecondsRange`).
     public var manualInputQuietSeconds: Double
+    /// Pause focusing while a hand covers the face or tracking is unstable (SPEC 3.10).
+    public var pauseWhenFaceCovered: Bool
 
     /// Allowed range for `dwellSeconds`.
     public static let dwellSecondsRange: ClosedRange<Double> = 0.3...5.0
@@ -55,7 +57,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hotKeyEnabled: Bool = true,
         pauseOnMouseActivity: Bool = true,
         pauseOnKeyboardActivity: Bool = true,
-        manualInputQuietSeconds: Double = 1.5
+        manualInputQuietSeconds: Double = 1.5,
+        pauseWhenFaceCovered: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.triggerMode = triggerMode
@@ -71,6 +74,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.pauseOnMouseActivity = pauseOnMouseActivity
         self.pauseOnKeyboardActivity = pauseOnKeyboardActivity
         self.manualInputQuietSeconds = manualInputQuietSeconds
+        self.pauseWhenFaceCovered = pauseWhenFaceCovered
         clamp()
     }
 
@@ -89,6 +93,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case pauseOnMouseActivity
         case pauseOnKeyboardActivity
         case manualInputQuietSeconds
+        case pauseWhenFaceCovered
     }
 
     public init(from decoder: Decoder) throws {
@@ -107,6 +112,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         pauseOnMouseActivity = try c.decodeIfPresent(Bool.self, forKey: .pauseOnMouseActivity) ?? true
         pauseOnKeyboardActivity = try c.decodeIfPresent(Bool.self, forKey: .pauseOnKeyboardActivity) ?? true
         manualInputQuietSeconds = try c.decodeIfPresent(Double.self, forKey: .manualInputQuietSeconds) ?? 1.5
+        pauseWhenFaceCovered = try c.decodeIfPresent(Bool.self, forKey: .pauseWhenFaceCovered) ?? true
         clamp()
     }
 

@@ -99,6 +99,9 @@ struct MenuBarContent: View {
         case .stale:
             return "Calibration stale — recalibrate"
         case .ok:
+            if let issue = pipeline.trackingIssue {
+                return issue
+            }
             guard pipeline.isRunning else { return "Starting…" }
             let face = pipeline.faceDetected ? "face ✓" : "no face"
             return "Tracking · \(Int(pipeline.fps.rounded())) fps · \(face)"

@@ -538,3 +538,39 @@ private func isClearing(_ action: FocusAction) -> Bool {
     }
     #expect(!paused.contains { isFocus($0) })
 }
+
+// MARK: - Tracking reliability (SPEC 3.10)
+
+/// While tracking is unreliable the engine clears the highlight and forgets any
+/// half-finished dwell, so the glitch cannot fire focus and progress restarts
+/// from zero once tracking is trusted again.
+@Test func unreliableIngestClearsHighlightAndResetsDwell() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.5
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 42)
+
+    // Accumulate most of the dwell on A.
+    var t = 0.0
+    while t <= 0.4 {
+        _ = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t)
+        t += 0.05
+    }
+
+    // An unreliable frame clears the highlight and never focuses.
+    let cleared = engine.ingest(unreliableAt: t)
+    #expect(cleared.contains { isClearing($0) })
+    #expect(!cleared.contains { isFocus($0) })
+
+    // The dwell restarts from zero: the next gaze frame reports fresh progress
+    // and does not fire from the pre-glitch start timestamp.
+    let next = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t + 0.05)
+    let progress = next.compactMap { action -> Double? in
+        if case .highlight(let w, let p) = action, w?.id == 1 { return p }
+        return nil
+    }.first
+    #expect(progress == 0.0)
+    #expect(!next.contains { isFocus($0) })
+}

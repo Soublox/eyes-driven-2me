@@ -32,10 +32,20 @@ final class FaceTracker {
     private let sequenceHandler = VNSequenceRequestHandler()
     private let rectanglesRequest = VNDetectFaceRectanglesRequest()
     private let landmarksRequest = VNDetectFaceLandmarksRequest()
+    private let captureQualityRequest = VNDetectFaceCaptureQualityRequest()
+    private let handPoseRequest = VNDetectHumanHandPoseRequest()
+
+    /// Frame counter, used to run the (more expensive) hand-pose request on
+    /// every second frame and reuse the last overlap in between.
+    private var frameIndex = 0
+    private var lastHandOverlap: Double = 0
 
     init() {
         rectanglesRequest.revision = VNDetectFaceRectanglesRequestRevision3
         landmarksRequest.revision = VNDetectFaceLandmarksRequest.currentRevision
+        captureQualityRequest.revision = VNDetectFaceCaptureQualityRequestRevision3
+        handPoseRequest.revision = VNDetectHumanHandPoseRequest.currentRevision
+        handPoseRequest.maximumHandCount = 2
     }
 
     /// Runs face detection on one frame and returns the features of the largest
@@ -67,6 +77,26 @@ final class FaceTracker {
 
         let box = face.boundingBox
 
+        // Stage 3: face capture quality, tied to the chosen face.
+        captureQualityRequest.inputFaceObservations = [face]
+        var captureQuality: Double?
+        do {
+            try sequenceHandler.perform([captureQualityRequest], on: sampleBuffer)
+            captureQuality = captureQualityRequest.results?.first?.faceCaptureQuality.map(Double.init)
+        } catch {
+            captureQuality = nil
+        }
+
+        // Stage 4: hand-pose overlap, every second frame (reuse in between).
+        frameIndex += 1
+        let handOverlap: Double
+        if frameIndex % 2 == 1 {
+            handOverlap = measureHandOverlap(on: sampleBuffer, faceBox: box)
+            lastHandOverlap = handOverlap
+        } else {
+            handOverlap = lastHandOverlap
+        }
+
         return FaceFeatures(
             timestamp: timestamp,
             // Pose comes from the rectangles observation; the landmark request
@@ -79,8 +109,40 @@ final class FaceTracker {
             leftEyeOpenness: eyeOpenness(landmarks.leftEye),
             rightEyeOpenness: eyeOpenness(landmarks.rightEye),
             faceCenter: CGPoint(x: box.midX, y: box.midY),
-            faceSize: Double(box.width)
+            faceSize: Double(box.width),
+            landmarksConfidence: Double(landmarks.confidence),
+            captureQuality: captureQuality,
+            handOverlap: handOverlap
         )
+    }
+
+    // MARK: - Tracking reliability measurements
+
+    /// Fraction (`0...1`) of confidently recognized hand joints (confidence
+    /// > 0.3) that fall inside `faceBox` expanded by 20 %. Hand joints and the
+    /// face box are both in Vision's normalized image space (bottom-left
+    /// origin), so they are compared directly. 0 when no hand is seen or no
+    /// joint is confident enough.
+    private func measureHandOverlap(on sampleBuffer: CMSampleBuffer, faceBox: CGRect) -> Double {
+        do {
+            try sequenceHandler.perform([handPoseRequest], on: sampleBuffer)
+        } catch {
+            return 0
+        }
+        guard let hands = handPoseRequest.results, !hands.isEmpty else { return 0 }
+
+        let expanded = faceBox.insetBy(dx: -faceBox.width * 0.1, dy: -faceBox.height * 0.1)
+        var confident = 0
+        var inside = 0
+        for hand in hands {
+            guard let points = try? hand.recognizedPoints(.all) else { continue }
+            for point in points.values where point.confidence > 0.3 {
+                confident += 1
+                if expanded.contains(point.location) { inside += 1 }
+            }
+        }
+        guard confident > 0 else { return 0 }
+        return Double(inside) / Double(confident)
     }
 
     // MARK: - Measurements

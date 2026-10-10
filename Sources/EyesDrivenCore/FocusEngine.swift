@@ -158,6 +158,20 @@ public final class FocusEngine {
         return actions
     }
 
+    /// Report that tracking is unreliable for this frame (SPEC 3.10): a hand on
+    /// the face or a tracking glitch.
+    ///
+    /// Clears the highlight (deduplicated like any other highlight) and resets
+    /// the dwell detector so a glitch cannot fire focus or leave half-finished
+    /// progress behind. The caller must not feed gaze or nods while unreliable,
+    /// so no sample is appended to the gaze history.
+    public func ingest(unreliableAt timestamp: TimeInterval) -> [FocusAction] {
+        dwell.reset()
+        var actions: [FocusAction] = []
+        appendHighlight(nil, progress: 0, into: &actions)
+        return actions
+    }
+
     /// Feed a completed nod event.
     public func ingest(nod: NodEvent) -> [FocusAction] {
         guard settings.isEnabled else { return disabledActions() }

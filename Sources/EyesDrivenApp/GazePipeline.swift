@@ -56,15 +56,20 @@ final class GazePipeline: ObservableObject {
     /// Whether gaze focus is currently paused because the user is using the
     /// mouse or typing (SPEC 3.8/3.9). Updated only when it changes.
     @Published private(set) var manualInputActive = false
+    /// Set while focusing is paused because a hand covers the face or tracking
+    /// is unstable (SPEC 3.10), for the menu status. Nil when tracking is fine
+    /// or the feature is off. Updated only when it changes.
+    @Published private(set) var trackingIssue: String?
 
     // MARK: - Collaborators
 
     /// Draws the highlight and the debug gaze dot. Owned by `AppModel`.
     weak var overlay: OverlayController?
 
-    /// While set, every frame is forwarded here and no gaze/nod processing
+    /// While set, every frame is forwarded here (with a flag telling whether the
+    /// tracking-quality gate considers it reliable) and no gaze/nod processing
     /// happens. Used by `CalibrationController`.
-    var calibrationSink: ((FaceFeatures) -> Void)?
+    var calibrationSink: ((FaceFeatures, Bool) -> Void)?
 
     /// While true, gaze and nods are not fed to the focus engine, so the app
     /// never changes the focused window. Set from the Settings window's
@@ -88,6 +93,7 @@ final class GazePipeline: ObservableObject {
     private let tracker = FaceTracker()
     private let filter = PointFilter()
     private let nodDetector = NodDetector()
+    private var qualityGate = TrackingQualityGate()
     private let engine: FocusEngine
 
     private var model: GazeModel?
@@ -95,6 +101,10 @@ final class GazePipeline: ObservableObject {
 
     private var cameraRunning = false
     private var calibrating = false
+    /// Whether the current frame stream is unreliable because of the gate
+    /// (hand on the face / tracking glitch), used to reset the nod detector
+    /// exactly once on entering the unreliable state (SPEC 3.10).
+    private var trackingUnreliable = false
     /// True during the 15 s gaze-dot test: the camera and gaze prediction run
     /// even when tracking is disabled, so the dot can follow the eyes. The
     /// focus engine still respects `settings.isEnabled`, so nothing is focused.
@@ -239,6 +249,9 @@ final class GazePipeline: ObservableObject {
     private func resetSmoothing() {
         filter.reset()
         nodDetector.reset()
+        qualityGate.reset()
+        trackingUnreliable = false
+        trackingIssue = nil
     }
 
     // MARK: - Camera
@@ -292,6 +305,9 @@ final class GazePipeline: ObservableObject {
         faceDetected = false
         stopTimers()
         currentTargetName = nil
+        qualityGate.reset()
+        trackingUnreliable = false
+        trackingIssue = nil
         overlay?.update(target: nil, progress: 0)
         overlay?.update(gaze: nil)
     }
@@ -308,12 +324,37 @@ final class GazePipeline: ObservableObject {
         }
         faceDetected = true
 
+        // Tracking-quality gate (SPEC 3.10). Runs on every frame with a face so
+        // the hysteresis and the pose-jump continuity stay coherent, both while
+        // calibrating and while focusing.
+        let quality = qualityGate.process(features)
+
         if let calibrationSink {
-            calibrationSink(features)
+            // The controller rejects unreliable frames and shows the hands hint.
+            calibrationSink(features, quality.isReliable)
             return
         }
 
         guard settings.isEnabled || testingGazeDot, let model else { return }
+
+        let pauseForTracking = settings.pauseWhenFaceCovered && !quality.isReliable
+        publishTrackingIssue(quality)
+
+        if pauseForTracking {
+            // Hand on the face / unstable tracking: never predict or ingest
+            // gaze, hide the dot, clear the highlight and restart the dwell.
+            // The nod detector is reset once on entering so the hand movement
+            // cannot fire a nod and the baseline re-seeds on recovery.
+            if !trackingUnreliable {
+                trackingUnreliable = true
+                nodDetector.reset()
+            }
+            overlay?.update(gaze: nil)
+            guard !suspendFocusing else { return }
+            apply(engine.ingest(unreliableAt: features.timestamp))
+            return
+        }
+        trackingUnreliable = false
 
         let raw = model.predict(features)
         let filtered = filter.filter(raw, at: features.timestamp)
@@ -340,6 +381,23 @@ final class GazePipeline: ObservableObject {
 
         if let event = nodDetector.process(pitch: features.pitch, timestamp: features.timestamp) {
             apply(engine.ingest(nod: event))
+        }
+    }
+
+    /// Update the menu status for the tracking-quality gate (SPEC 3.10),
+    /// publishing only when the string changes. Nil while tracking is fine or
+    /// `pauseWhenFaceCovered` is off.
+    private func publishTrackingIssue(_ quality: TrackingQuality) {
+        let issue: String?
+        if !settings.pauseWhenFaceCovered || quality.isReliable {
+            issue = nil
+        } else if quality.reasons.contains(.handOnFace) {
+            issue = "Paused · face partially covered"
+        } else {
+            issue = "Paused · tracking unstable"
+        }
+        if issue != trackingIssue {
+            trackingIssue = issue
         }
     }
 

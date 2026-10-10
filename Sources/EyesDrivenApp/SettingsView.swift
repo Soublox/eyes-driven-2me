@@ -57,6 +57,10 @@ struct SettingsView: View {
                 )
             }
 
+            Section("Tracking") {
+                Toggle("Pause when the face is covered or tracking is unstable", isOn: pauseWhenFaceCoveredBinding)
+            }
+
             Section("Camera") {
                 Picker("Camera", selection: cameraBinding) {
                     Text("Default (built-in)").tag("")
@@ -226,6 +230,13 @@ struct SettingsView: View {
         Binding(
             get: { model.settings.manualInputQuietSeconds },
             set: { value in model.updateSettings { $0.manualInputQuietSeconds = value } }
+        )
+    }
+
+    private var pauseWhenFaceCoveredBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.pauseWhenFaceCovered },
+            set: { value in model.updateSettings { $0.pauseWhenFaceCovered = value } }
         )
     }
 
