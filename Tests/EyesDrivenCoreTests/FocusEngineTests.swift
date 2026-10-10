@@ -424,3 +424,117 @@ private func isClearing(_ action: FocusAction) -> Bool {
     }.first
     #expect(progress == 0.0)
 }
+
+// MARK: - Manual input wins over gaze (SPEC 3.8, round 5)
+
+/// The side-by-side scenario from the user report: two windows A|B, the gaze
+/// rests on A while the user keeps using the mouse (window B). Manual input is
+/// continuously active, so A must never focus and the highlight stays cleared.
+@Test func manualInputSuppressesDwellFocus() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    let b = win(2, CGRect(x: 1000, y: 0, width: 800, height: 600))
+    engine.updateWindows([a, b], displays: [display], frontmostWindowID: 42)
+
+    var actions: [FocusAction] = []
+    var t = 0.0
+    while t <= 3.0 {
+        actions += engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t, secondsSinceManualInput: 0.1)
+        t += 0.05
+    }
+    #expect(!actions.contains { isFocus($0) })
+    // No highlight ever carries a window while manual input is active.
+    let highlightsWindow = actions.contains { action in
+        if case .highlight(let w, _) = action { return w != nil }
+        return false
+    }
+    #expect(!highlightsWindow)
+}
+
+/// Once the user stops, dwell restarts from zero and only fires after a full
+/// `dwellSeconds` measured from the moment input became quiet.
+@Test func dwellRestartsAfterManualInputStops() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.5
+    settings.cooldownSeconds = 0.2
+    settings.manualInputQuietSeconds = 1.5
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    engine.updateWindows([a], displays: [display], frontmostWindowID: 42)
+
+    // Input stays "active" (0.1 s ago) up to and including t = 1.0.
+    var t = 0.0
+    while t <= 1.0 {
+        _ = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t, secondsSinceManualInput: 0.1)
+        t += 0.05
+    }
+
+    // First quiet frame: 1.05 (input is now 1.6 s old, past the 1.5 s threshold).
+    let quietMoment = t
+    var firedAt: TimeInterval?
+    while t <= 2.0, firedAt == nil {
+        let fired = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t, secondsSinceManualInput: 1.6)
+            .contains { isFocus($0, .dwell) }
+        if fired { firedAt = t }
+        t += 0.05
+    }
+    #expect(firedAt != nil)
+    // A full dwell after the quiet moment — progress could not be inherited.
+    if let firedAt {
+        #expect(firedAt >= quietMoment + settings.dwellSeconds - 0.001)
+    }
+}
+
+/// A nod that completes while manual input is active must not focus.
+@Test func nodDuringManualInputDoesNotFocus() {
+    var settings = AppSettings()
+    settings.triggerMode = .dwellOrNod
+    settings.cooldownSeconds = 0.2
+    let engine = FocusEngine(settings: settings)
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+    let b = win(2, CGRect(x: 1000, y: 0, width: 800, height: 600))
+    engine.updateWindows([a, b], displays: [display], frontmostWindowID: 42)
+
+    // Gaze history exists (looking at A), but manual input is active throughout.
+    for t in stride(from: 0.70, through: 1.20, by: 0.05) {
+        _ = engine.ingest(gaze: CGPoint(x: 400, y: 300), at: t, secondsSinceManualInput: 0.2)
+    }
+    let actions = engine.ingest(nod: NodEvent(startTimestamp: 1.0, endTimestamp: 1.2))
+    #expect(!actions.contains { isFocus($0) })
+}
+
+/// The quiet threshold is exclusive: at exactly `manualInputQuietSeconds`
+/// manual input is no longer active and dwell works normally, just below it
+/// focus is paused.
+@Test func manualInputQuietThresholdBoundary() {
+    var settings = AppSettings()
+    settings.dwellSeconds = 0.3
+    settings.cooldownSeconds = 0.2
+    settings.manualInputQuietSeconds = 1.5
+    let a = win(1, CGRect(x: 0, y: 0, width: 800, height: 600))
+
+    // Exactly at the threshold: not paused -> dwell fires.
+    let atThreshold = FocusEngine(settings: settings)
+    atThreshold.updateWindows([a], displays: [display], frontmostWindowID: 42)
+    var resumed: [FocusAction] = []
+    var t = 0.0
+    while t <= 0.4 {
+        resumed += atThreshold.ingest(gaze: CGPoint(x: 400, y: 300), at: t, secondsSinceManualInput: 1.5)
+        t += 0.05
+    }
+    #expect(resumed.contains { isFocus($0, .dwell) })
+
+    // Just below the threshold: paused -> no focus.
+    let belowThreshold = FocusEngine(settings: settings)
+    belowThreshold.updateWindows([a], displays: [display], frontmostWindowID: 42)
+    var paused: [FocusAction] = []
+    t = 0.0
+    while t <= 0.4 {
+        paused += belowThreshold.ingest(gaze: CGPoint(x: 400, y: 300), at: t, secondsSinceManualInput: 1.49)
+        t += 0.05
+    }
+    #expect(!paused.contains { isFocus($0) })
+}

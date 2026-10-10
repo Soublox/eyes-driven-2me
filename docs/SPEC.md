@@ -180,7 +180,8 @@ Generic over `ID: Hashable`.
 
 ### 3.8 `FocusEngine` (FocusEngine.swift)
 Pure decision-maker, the only place combining the pieces above.
-- Inputs (methods): `ingest(gaze: CGPoint, at:)`, `ingest(nod: NodEvent)`,
+- Inputs (methods): `ingest(gaze: CGPoint, at:)` (convenience, no manual-input
+  information), `ingest(gaze:at:secondsSinceManualInput:)`, `ingest(nod: NodEvent)`,
   `updateWindows(_ windows:, displays:, frontmostWindowID:)`,
   `updateSettings(_:)`, `notifyFocused(windowID:at:)`.
 - Output: each ingest returns `[FocusAction]`:
@@ -197,6 +198,13 @@ Pure decision-maker, the only place combining the pieces above.
   - `cooldown` (settings.cooldownSeconds, default 0.8 s) after any focus.
   - Nod: target = resolve(median gaze in `[start - 0.35, start - 0.05]`).
   - Trigger modes: `.dwell`, `.nod`, `.dwellOrNod`.
+  - Manual input: `ingest(gaze:at:secondsSinceManualInput:)` also receives the
+    time since the user last used the mouse/keyboard. While that value is below
+    `settings.manualInputQuietSeconds`, focus is paused: neither dwell nor nod
+    may `.focus`, the dwell detector is reset every paused frame so progress
+    restarts from zero once input stops, and `.highlight(nil, 0)` is emitted
+    (deduplicated like any other highlight). A nod that arrives while manual
+    input is active is ignored.
 
 ### 3.9 `AppSettings` (Settings.swift)
 `Codable, Equatable` with defaults:
@@ -204,7 +212,9 @@ Pure decision-maker, the only place combining the pieces above.
 (clamped 0.3...5.0), `moveCursorToFocusedWindow = false`,
 `nodSensitivity = 0.5` (0...1, maps to minAmplitude 0.16...0.05 rad linearly),
 `cooldownSeconds = 0.8`, `showTargetHighlight = true`, `showGazeDot = false`,
-`cameraUniqueID: String? = nil`, `hotKeyEnabled = true`.
+`cameraUniqueID: String? = nil`, `hotKeyEnabled = true`,
+`pauseOnMouseActivity = true`, `pauseOnKeyboardActivity = true`,
+`manualInputQuietSeconds = 1.5` (clamped 0.3...5.0).
 Decoding must tolerate missing keys (fall back to defaults) so new settings
 don't break old saved files.
 
@@ -218,11 +228,11 @@ don't break old saved files.
 | `WindowFocuser.swift` | Focus a `WindowInfo` via AX: `AXUIElementCreateApplication(pid)`, find the AX window whose position/size match `frame` (±4 pt; prefer title match when available). Order matters: set app `kAXFrontmostAttribute = true` first, then on the window set `kAXMainAttribute`, `kAXFocusedAttribute` and perform `AXRaise` (so the app does not bring a different window forward). `NSRunningApplication.activate()` only as a fallback when the AX frontmost call fails, and **never** with `.activateAllWindows` (that would pull every window of the app over the user's split layout). Optional cursor warp to the frame center (`CGWarpMouseCursorPosition` + `CGAssociateMouseAndMouseCursorPosition(1)`). Note: on macOS 14+ cooperative activation can ignore `activate()` from background apps — the AX frontmost attribute is the primary path. |
 | `Permissions.swift` | Camera (`AVCaptureDevice`), Accessibility (`AXIsProcessTrustedWithOptions`); helpers to open the right System Settings panes. |
 | `HotKey.swift` | Carbon `RegisterEventHotKey` global hotkey (no permission needed), default `⌃⌥⌘E`, callback on main thread. |
-| `GazePipeline.swift` | Glue: camera → tracker → model → filter → history → FocusEngine → focuser/overlay. Owns the `NodDetector`. Refreshes the window snapshot at ~4 Hz on the main thread. Publishes status (fps, face detected, current target) for the UI. |
+| `GazePipeline.swift` | Glue: camera → tracker → model → filter → history → FocusEngine → focuser/overlay. Owns the `NodDetector`. Refreshes the window snapshot at ~4 Hz on the main thread. Polls `CGEventSource.secondsSinceLastEventType` per frame (mouse/keyboard, no extra permission) and feeds it to the engine so manual input pauses focus; publishes `manualInputActive` (SPEC 3.8/3.9). Publishes status (fps, face detected, current target) for the UI. |
 | `CalibrationController.swift` | Full-screen windows on every display (created **without** `NSWindow(..., screen:)`, which offsets the frame twice; use `setFrame(screen.frame)`). Flow: intro on the primary display (explanation + proportional mini-map of the display layout, Space to start) → per display, left to right: dim the others, accent border on the active one, centered 3·2·1 countdown with system sounds (Tink per second, Pop on start) → 3×3 targets (10/50/90%, shuffled within the display): 0.8 s settle (dot shrinks), 1.0 s collect (ring fills; first 0.15 s skipped), progress label "Screen i of n · Point j of 9". Keys: Space pause, R redo target, Esc cancel. Samples are cleaned with `CalibrationCleaner` (per-target MAD outliers on yaw/pitch) before `GazeModel.fit`. Result panel: CV error, per-display error, warning when two displays have indistinguishable head yaw (< 0.05 rad), buttons Done / Recalibrate / Test (gaze dot for 15 s). Sounds toggled by `AppSettings.calibrationSounds`. |
 | `OverlayController.swift` | One click-through, transparent, borderless window per display at `.screenSaver` level, `ignoresMouseEvents = true`, joins all spaces; draws the target frame highlight with a dwell progress indicator and the optional gaze dot. |
 | `Storage.swift` | Persist `AppSettings` (UserDefaults, JSON) and `CalibrationProfile` (`~/Library/Application Support/EyesDriven2me/calibration.json`). |
-| `MenuBar.swift`, `SettingsView.swift`, `EyesDrivenApp.swift` | SwiftUI `MenuBarExtra` app (`@main`), activation policy `.accessory`. Menu: status line, Enabled toggle, trigger mode picker, Calibrate…, Settings…, Show gaze dot, Quit. |
+| `MenuBar.swift`, `SettingsView.swift`, `EyesDrivenApp.swift` | SwiftUI `MenuBarExtra` app (`@main`), activation policy `.accessory`. Menu: status line (shows "Paused · mouse/keyboard in use" while manual input is active), Enabled toggle, trigger mode picker, Calibrate…, Settings…, Show gaze dot, Quit. Settings includes a "Manual input" section: pause-on-mouse / pause-on-typing toggles and the resume-after slider. |
 
 Info.plist (embedded in the binary via `-sectcreate` so `swift run` works, and
 copied into the `.app` by `scripts/bundle.sh`): `NSCameraUsageDescription`,

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreGraphics
 import CoreMedia
 import EyesDrivenCore
 import Foundation
@@ -52,6 +53,9 @@ final class GazePipeline: ObservableObject {
     @Published private(set) var calibrationState: CalibrationState = .missing
     /// Missing system permissions.
     @Published private(set) var permissionProblem: PermissionProblem = []
+    /// Whether gaze focus is currently paused because the user is using the
+    /// mouse or typing (SPEC 3.8/3.9). Updated only when it changes.
+    @Published private(set) var manualInputActive = false
 
     // MARK: - Collaborators
 
@@ -316,11 +320,23 @@ final class GazePipeline: ObservableObject {
         overlay?.update(gaze: filtered)
         lastGazeTimestamp = features.timestamp
 
+        // Manual input (mouse/keyboard) pauses gaze focus so a hand on the
+        // mouse always wins over gaze (SPEC 3.8). Polled from CoreGraphics; no
+        // extra permission. Publish only when the value changes.
+        let pauseNow = secondsSinceManualInput < settings.manualInputQuietSeconds
+        if pauseNow != manualInputActive {
+            manualInputActive = pauseNow
+        }
+
         // Suspended while our own Settings window is key: keep showing the gaze
         // dot but never act on it, so the app cannot steal focus.
         guard !suspendFocusing else { return }
 
-        apply(engine.ingest(gaze: filtered, at: features.timestamp))
+        apply(engine.ingest(
+            gaze: filtered,
+            at: features.timestamp,
+            secondsSinceManualInput: secondsSinceManualInput
+        ))
 
         if let event = nodDetector.process(pitch: features.pitch, timestamp: features.timestamp) {
             apply(engine.ingest(nod: event))
@@ -341,6 +357,49 @@ final class GazePipeline: ObservableObject {
             }
         }
     }
+
+    // MARK: - Manual input
+
+    /// Seconds since the most recent mouse/keyboard event, polled from
+    /// CoreGraphics (`CGEventSource`); no additional permission is required.
+    ///
+    /// The minimum over the enabled event types. Returns `.infinity` when both
+    /// pause flags are off, so manual input never pauses focus (SPEC 3.9).
+    private var secondsSinceManualInput: TimeInterval {
+        var minimum = TimeInterval.infinity
+        if settings.pauseOnMouseActivity {
+            for type in GazePipeline.mouseEventTypes {
+                minimum = min(
+                    minimum,
+                    CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: type)
+                )
+            }
+        }
+        if settings.pauseOnKeyboardActivity {
+            for type in GazePipeline.keyboardEventTypes {
+                minimum = min(
+                    minimum,
+                    CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: type)
+                )
+            }
+        }
+        return minimum
+    }
+
+    private static let mouseEventTypes: [CGEventType] = [
+        .mouseMoved,
+        .leftMouseDown,
+        .rightMouseDown,
+        .otherMouseDown,
+        .leftMouseDragged,
+        .rightMouseDragged,
+        .scrollWheel
+    ]
+
+    private static let keyboardEventTypes: [CGEventType] = [
+        .keyDown,
+        .flagsChanged
+    ]
 
     // MARK: - Window snapshot
 

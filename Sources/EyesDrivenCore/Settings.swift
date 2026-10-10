@@ -27,11 +27,19 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var cameraUniqueID: String?
     /// Whether the global hotkey is registered.
     public var hotKeyEnabled: Bool
+    /// Pause gaze focus while the mouse is being used (SPEC 3.9).
+    public var pauseOnMouseActivity: Bool
+    /// Pause gaze focus while typing (SPEC 3.9).
+    public var pauseOnKeyboardActivity: Bool
+    /// Seconds of no manual input before focus resumes (clamped to `manualInputQuietSecondsRange`).
+    public var manualInputQuietSeconds: Double
 
     /// Allowed range for `dwellSeconds`.
     public static let dwellSecondsRange: ClosedRange<Double> = 0.3...5.0
     /// Allowed range for `nodSensitivity`.
     public static let nodSensitivityRange: ClosedRange<Double> = 0.0...1.0
+    /// Allowed range for `manualInputQuietSeconds`.
+    public static let manualInputQuietSecondsRange: ClosedRange<Double> = 0.3...5.0
 
     public init(
         isEnabled: Bool = true,
@@ -44,7 +52,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showGazeDot: Bool = false,
         calibrationSounds: Bool = true,
         cameraUniqueID: String? = nil,
-        hotKeyEnabled: Bool = true
+        hotKeyEnabled: Bool = true,
+        pauseOnMouseActivity: Bool = true,
+        pauseOnKeyboardActivity: Bool = true,
+        manualInputQuietSeconds: Double = 1.5
     ) {
         self.isEnabled = isEnabled
         self.triggerMode = triggerMode
@@ -57,6 +68,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.calibrationSounds = calibrationSounds
         self.cameraUniqueID = cameraUniqueID
         self.hotKeyEnabled = hotKeyEnabled
+        self.pauseOnMouseActivity = pauseOnMouseActivity
+        self.pauseOnKeyboardActivity = pauseOnKeyboardActivity
+        self.manualInputQuietSeconds = manualInputQuietSeconds
         clamp()
     }
 
@@ -72,6 +86,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case calibrationSounds
         case cameraUniqueID
         case hotKeyEnabled
+        case pauseOnMouseActivity
+        case pauseOnKeyboardActivity
+        case manualInputQuietSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -87,6 +104,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         calibrationSounds = try c.decodeIfPresent(Bool.self, forKey: .calibrationSounds) ?? true
         cameraUniqueID = try c.decodeIfPresent(String.self, forKey: .cameraUniqueID)
         hotKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotKeyEnabled) ?? true
+        pauseOnMouseActivity = try c.decodeIfPresent(Bool.self, forKey: .pauseOnMouseActivity) ?? true
+        pauseOnKeyboardActivity = try c.decodeIfPresent(Bool.self, forKey: .pauseOnKeyboardActivity) ?? true
+        manualInputQuietSeconds = try c.decodeIfPresent(Double.self, forKey: .manualInputQuietSeconds) ?? 1.5
         clamp()
     }
 
@@ -98,6 +118,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         nodSensitivity = min(
             max(nodSensitivity, AppSettings.nodSensitivityRange.lowerBound),
             AppSettings.nodSensitivityRange.upperBound
+        )
+        manualInputQuietSeconds = min(
+            max(manualInputQuietSeconds, AppSettings.manualInputQuietSecondsRange.lowerBound),
+            AppSettings.manualInputQuietSecondsRange.upperBound
         )
     }
 }

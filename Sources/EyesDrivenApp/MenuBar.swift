@@ -90,6 +90,9 @@ struct MenuBarContent: View {
         if !model.settings.isEnabled {
             return "Paused"
         }
+        if pipeline.manualInputActive {
+            return "Paused · mouse/keyboard in use"
+        }
         switch pipeline.calibrationState {
         case .missing:
             return "Calibration needed"

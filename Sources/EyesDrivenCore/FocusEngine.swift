@@ -20,6 +20,13 @@ public final class FocusEngine {
     private var cooldownUntil: TimeInterval = -.infinity
     private var lastHighlight: (id: UInt32?, progress: Double)?
     private var disabledHighlightEmitted = false
+    /// Seconds since the last mouse/keyboard event, as last reported (SPEC 3.8).
+    private var lastSecondsSinceManualInput: TimeInterval = .infinity
+
+    /// Whether manual input is currently pausing focus (SPEC 3.8).
+    private var manualInputActive: Bool {
+        lastSecondsSinceManualInput < settings.manualInputQuietSeconds
+    }
 
     /// Create an engine for the given settings.
     public init(settings: AppSettings, excludedPIDs: Set<Int32> = []) {
@@ -66,11 +73,39 @@ public final class FocusEngine {
         lastHighlight = nil
     }
 
-    /// Feed a filtered gaze point.
+    /// Feed a filtered gaze point without manual-input information.
+    ///
+    /// Convenience for callers that do not track mouse/keyboard activity: it
+    /// behaves as if the user never touched the mouse or keyboard, so focus is
+    /// never paused for manual input.
     public func ingest(gaze: CGPoint, at timestamp: TimeInterval) -> [FocusAction] {
+        ingest(gaze: gaze, at: timestamp, secondsSinceManualInput: .infinity)
+    }
+
+    /// Feed a filtered gaze point together with how long ago the user last used
+    /// the mouse or keyboard (SPEC 3.8).
+    ///
+    /// While manual input is "active" (`secondsSinceManualInput` below
+    /// `settings.manualInputQuietSeconds`) focus is paused: no dwell or nod
+    /// focus fires and the highlight is cleared. The dwell detector is reset on
+    /// every paused frame so progress restarts from zero once input stops.
+    public func ingest(
+        gaze: CGPoint,
+        at timestamp: TimeInterval,
+        secondsSinceManualInput: TimeInterval
+    ) -> [FocusAction] {
         guard settings.isEnabled else { return disabledActions() }
 
         history.append(gaze, at: timestamp)
+        lastSecondsSinceManualInput = secondsSinceManualInput
+
+        if manualInputActive {
+            dwell.reset()
+            var paused: [FocusAction] = []
+            appendHighlight(nil, progress: 0, into: &paused)
+            return paused
+        }
+
         let resolved = resolve(gaze)
         var actions: [FocusAction] = []
 
@@ -127,6 +162,8 @@ public final class FocusEngine {
     public func ingest(nod: NodEvent) -> [FocusAction] {
         guard settings.isEnabled else { return disabledActions() }
         guard settings.triggerMode != .dwell else { return [] }
+        // A nod that arrives while manual input is active must not focus.
+        guard !manualInputActive else { return [] }
 
         let start = nod.startTimestamp
         guard let median = history.median(from: start - 0.35, to: start - 0.05) else { return [] }

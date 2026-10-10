@@ -46,6 +46,17 @@ struct SettingsView: View {
                 Toggle("Move cursor to focused window", isOn: moveCursorBinding)
             }
 
+            Section("Manual input") {
+                Toggle("Pause while using the mouse", isOn: pauseOnMouseBinding)
+                Toggle("Pause while typing", isOn: pauseOnKeyboardBinding)
+                sliderRow(
+                    "Resume after",
+                    value: manualInputQuietBinding,
+                    range: AppSettings.manualInputQuietSecondsRange,
+                    display: String(format: "%.1f s", model.settings.manualInputQuietSeconds)
+                )
+            }
+
             Section("Camera") {
                 Picker("Camera", selection: cameraBinding) {
                     Text("Default (built-in)").tag("")
@@ -194,6 +205,27 @@ struct SettingsView: View {
         Binding(
             get: { model.settings.hotKeyEnabled },
             set: { value in model.updateSettings { $0.hotKeyEnabled = value } }
+        )
+    }
+
+    private var pauseOnMouseBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.pauseOnMouseActivity },
+            set: { value in model.updateSettings { $0.pauseOnMouseActivity = value } }
+        )
+    }
+
+    private var pauseOnKeyboardBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.pauseOnKeyboardActivity },
+            set: { value in model.updateSettings { $0.pauseOnKeyboardActivity = value } }
+        )
+    }
+
+    private var manualInputQuietBinding: Binding<Double> {
+        Binding(
+            get: { model.settings.manualInputQuietSeconds },
+            set: { value in model.updateSettings { $0.manualInputQuietSeconds = value } }
         )
     }
 
