@@ -77,6 +77,58 @@ public enum CalibrationLayout {
             .map { points(in: $0.frame) }
     }
 
+    /// Miniature proportional map of the connected displays, laid out inside
+    /// `size` (top-left origin, y down, matching CoreGraphics) so the user
+    /// recognizes the physical arrangement (SPEC 4, round 3).
+    ///
+    /// The frames are scaled by a single factor that fits the combined bounding
+    /// box into `size` minus `padding` on every side, preserving their relative
+    /// positions; the map is centered. Rects are returned in the same order as
+    /// `displays`, and `.zero` rects are returned when the bounding box is
+    /// degenerate.
+    public static func miniMap(
+        displays: [DisplayInfo],
+        size: CGSize,
+        padding: CGFloat = 0
+    ) -> [CGRect] {
+        guard !displays.isEmpty else { return [] }
+
+        var minX = CGFloat.greatestFiniteMagnitude
+        var minY = CGFloat.greatestFiniteMagnitude
+        var maxX = -CGFloat.greatestFiniteMagnitude
+        var maxY = -CGFloat.greatestFiniteMagnitude
+        for display in displays {
+            minX = min(minX, display.frame.minX)
+            minY = min(minY, display.frame.minY)
+            maxX = max(maxX, display.frame.maxX)
+            maxY = max(maxY, display.frame.maxY)
+        }
+
+        let boundsWidth = maxX - minX
+        let boundsHeight = maxY - minY
+        guard boundsWidth > 0, boundsHeight > 0 else {
+            return displays.map { _ in .zero }
+        }
+
+        let availableWidth = max(size.width - 2 * padding, 1)
+        let availableHeight = max(size.height - 2 * padding, 1)
+        let scale = min(availableWidth / boundsWidth, availableHeight / boundsHeight)
+
+        let scaledWidth = boundsWidth * scale
+        let scaledHeight = boundsHeight * scale
+        let offsetX = padding + (availableWidth - scaledWidth) / 2
+        let offsetY = padding + (availableHeight - scaledHeight) / 2
+
+        return displays.map { display in
+            CGRect(
+                x: offsetX + (display.frame.minX - minX) * scale,
+                y: offsetY + (display.frame.minY - minY) * scale,
+                width: display.frame.width * scale,
+                height: display.frame.height * scale
+            )
+        }
+    }
+
     /// Calibration targets for every display in left-to-right order, with the
     /// points of each display shuffled independently (order randomized within a
     /// display, SPEC 4). Uses the system random number generator.

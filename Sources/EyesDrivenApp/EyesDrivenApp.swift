@@ -21,6 +21,9 @@ final class AppModel: ObservableObject {
     let calibration: CalibrationController
 
     private var hotKey: HotKey?
+    /// Previous `showGazeDot` value while the calibration Test button is showing
+    /// the dot for 15 seconds.
+    private var gazeDotTestRestore: Bool?
 
     init() {
         let loaded = Storage.loadSettings()
@@ -29,6 +32,9 @@ final class AppModel: ObservableObject {
         overlay = OverlayController()
         pipeline = GazePipeline(settings: loaded)
         calibration = CalibrationController(pipeline: pipeline)
+        calibration.soundsEnabled = loaded.calibrationSounds
+        calibration.onRecalibrate = { [weak self] in self?.startCalibration() }
+        calibration.onTest = { [weak self] in self?.startGazeDotTest() }
 
         pipeline.overlay = overlay
         overlay.apply(settings: loaded)
@@ -81,7 +87,22 @@ final class AppModel: ObservableObject {
         overlay.setVisible(false)
         overlay.update(target: nil, progress: 0)
         overlay.update(gaze: nil)
+        calibration.soundsEnabled = settings.calibrationSounds
         calibration.start()
+    }
+
+    /// Show the gaze dot for 15 seconds (the result panel's "Test" button), then
+    /// restore the previous `showGazeDot` value.
+    func startGazeDotTest() {
+        guard gazeDotTestRestore == nil else { return }
+        let previous = settings.showGazeDot
+        gazeDotTestRestore = previous
+        updateSettings { $0.showGazeDot = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, let previous = self.gazeDotTestRestore else { return }
+            self.gazeDotTestRestore = nil
+            self.updateSettings { $0.showGazeDot = previous }
+        }
     }
 
     /// Date, mean error and staleness of the saved calibration, if any.

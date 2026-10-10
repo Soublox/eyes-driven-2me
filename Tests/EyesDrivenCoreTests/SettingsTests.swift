@@ -41,6 +41,22 @@ import Testing
     #expect(s.nodSensitivity == 0.0)
 }
 
+@Test func calibrationSoundsDefaultsOnAndDecodesTolerantly() throws {
+    // Default is on.
+    #expect(AppSettings().calibrationSounds == true)
+
+    // An old saved file without the key falls back to the default.
+    let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+    #expect(legacy.calibrationSounds == true)
+
+    // An explicit value is honored.
+    let off = try JSONDecoder().decode(
+        AppSettings.self,
+        from: Data(#"{"calibrationSounds": false}"#.utf8)
+    )
+    #expect(off.calibrationSounds == false)
+}
+
 @Test func roundTrip() throws {
     var s = AppSettings()
     s.isEnabled = false
@@ -51,6 +67,7 @@ import Testing
     s.cooldownSeconds = 1.5
     s.showTargetHighlight = false
     s.showGazeDot = true
+    s.calibrationSounds = false
     s.cameraUniqueID = "abc-123"
     s.hotKeyEnabled = false
 

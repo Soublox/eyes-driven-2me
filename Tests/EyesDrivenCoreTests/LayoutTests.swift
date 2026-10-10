@@ -73,6 +73,35 @@ struct LayoutTests {
         points.sorted { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
     }
 
+    @Test("mini map preserves proportions and left-to-right order")
+    func miniMapProportions() {
+        let left = DisplayInfo(id: 1, frame: CGRect(x: -3840, y: 0, width: 3840, height: 2160))
+        let center = DisplayInfo(id: 2, frame: CGRect(x: 0, y: 0, width: 1728, height: 1080))
+        let right = DisplayInfo(id: 3, frame: CGRect(x: 1728, y: 0, width: 3688, height: 2160))
+        let size = CGSize(width: 300, height: 150)
+
+        let rects = CalibrationLayout.miniMap(displays: [left, center, right], size: size, padding: 4)
+        #expect(rects.count == 3)
+
+        // Left-to-right order is preserved.
+        #expect(rects[0].minX < rects[1].minX)
+        #expect(rects[1].minX < rects[2].minX)
+
+        // A single scale factor preserves the frames' relative sizes.
+        let scale = rects[0].width / left.frame.width
+        #expect(abs(rects[1].width - center.frame.width * scale) < 0.001)
+        #expect(abs(rects[1].height - center.frame.height * scale) < 0.001)
+        #expect(abs(rects[2].width - right.frame.width * scale) < 0.001)
+
+        // Everything fits inside the requested size (padding included).
+        for rect in rects {
+            #expect(rect.minX >= 0)
+            #expect(rect.minY >= 0)
+            #expect(rect.maxX <= size.width + 0.001)
+            #expect(rect.maxY <= size.height + 0.001)
+        }
+    }
+
     @Test("CG to AppKit rect on a screen right of the primary")
     func conversionRightOfPrimary() {
         let primaryHeight: CGFloat = 1080

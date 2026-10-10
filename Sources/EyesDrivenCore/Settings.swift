@@ -21,6 +21,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var showTargetHighlight: Bool
     /// Draw the debug gaze dot.
     public var showGazeDot: Bool
+    /// Play system sounds during calibration (ticks, start, target appear).
+    public var calibrationSounds: Bool
     /// Preferred camera device unique id, or nil for the default camera.
     public var cameraUniqueID: String?
     /// Whether the global hotkey is registered.
@@ -40,6 +42,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         cooldownSeconds: Double = 0.8,
         showTargetHighlight: Bool = true,
         showGazeDot: Bool = false,
+        calibrationSounds: Bool = true,
         cameraUniqueID: String? = nil,
         hotKeyEnabled: Bool = true
     ) {
@@ -51,6 +54,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.cooldownSeconds = cooldownSeconds
         self.showTargetHighlight = showTargetHighlight
         self.showGazeDot = showGazeDot
+        self.calibrationSounds = calibrationSounds
         self.cameraUniqueID = cameraUniqueID
         self.hotKeyEnabled = hotKeyEnabled
         clamp()
@@ -65,6 +69,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case cooldownSeconds
         case showTargetHighlight
         case showGazeDot
+        case calibrationSounds
         case cameraUniqueID
         case hotKeyEnabled
     }
@@ -79,6 +84,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         cooldownSeconds = try c.decodeIfPresent(Double.self, forKey: .cooldownSeconds) ?? 0.8
         showTargetHighlight = try c.decodeIfPresent(Bool.self, forKey: .showTargetHighlight) ?? true
         showGazeDot = try c.decodeIfPresent(Bool.self, forKey: .showGazeDot) ?? false
+        calibrationSounds = try c.decodeIfPresent(Bool.self, forKey: .calibrationSounds) ?? true
         cameraUniqueID = try c.decodeIfPresent(String.self, forKey: .cameraUniqueID)
         hotKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotKeyEnabled) ?? true
         clamp()
