@@ -77,12 +77,18 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/bundle.sh
 
+      - name: Disk image (.dmg)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/make-dmg.sh
+
       - name: Verify artifact
         run: |
           BIN=dist/EyesDriven2me.app/Contents/MacOS/EyesDriven2me
           lipo -archs "$BIN" | grep -q x86_64
           lipo -archs "$BIN" | grep -q arm64
           codesign --verify --verbose dist/EyesDriven2me.app
+          hdiutil verify "dist/EyesDriven2me-${{ steps.version.outputs.version }}.dmg"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/EyesDriven2me.app/Contents/Info.plist
           ls -la dist
 
@@ -93,13 +99,14 @@ jobs:
           cat > dist/notes.md <<EOF
           ## Install
 
-          1. Download \`EyesDriven2me-${VERSION}.zip\`, unzip it and move **EyesDriven2me.app** to **/Applications**.
+          1. Download \`EyesDriven2me-${VERSION}.dmg\`, open it and drag **Eyes Driven 2me** onto the **Applications** folder.
+             (Prefer a zip? \`EyesDriven2me-${VERSION}.zip\` contains the same app.)
           2. This build is not notarized yet, so the first time **right-click the app → Open → Open**
              (or run \`xattr -dr com.apple.quarantine /Applications/EyesDriven2me.app\`).
           3. Grant **Camera** and **Accessibility** access when asked, then choose **Calibrate…** in the menu bar.
 
           Universal binary: Apple Silicon and Intel (Intel support is experimental). Requires macOS 14 or newer.
-          Verify the download: \`shasum -a 256 -c EyesDriven2me-${VERSION}.zip.sha256\`
+          Verify the download: \`shasum -a 256 -c EyesDriven2me-${VERSION}.dmg.sha256\`
           EOF
           sed -i '' 's/^          //' dist/notes.md
 
@@ -117,6 +124,8 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.prerelease }}
           files: |
+            dist/EyesDriven2me-${{ steps.version.outputs.version }}.dmg
+            dist/EyesDriven2me-${{ steps.version.outputs.version }}.dmg.sha256
             dist/EyesDriven2me-${{ steps.version.outputs.version }}.zip
             dist/EyesDriven2me-${{ steps.version.outputs.version }}.zip.sha256
           fail_on_unmatched_files: true

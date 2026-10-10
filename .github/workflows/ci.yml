@@ -32,9 +32,14 @@ jobs:
       - name: Check universal binary
         run: lipo -archs dist/EyesDriven2me.app/Contents/MacOS/EyesDriven2me | grep -q "x86_64" && lipo -archs dist/EyesDriven2me.app/Contents/MacOS/EyesDriven2me | grep -q "arm64"
 
+      - name: Disk image (.dmg)
+        run: scripts/make-dmg.sh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: EyesDriven2me
-          path: dist/*.zip
+          path: |
+            dist/*.dmg
+            dist/*.zip
           if-no-files-found: error

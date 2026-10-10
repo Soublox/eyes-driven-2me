@@ -53,9 +53,10 @@ Nothing else happens — no clicking, no typing, no sending anything anywhere.
 
 ## Install
 
-1. Download the latest `EyesDriven2me-<version>.zip` from
+1. Download the latest `EyesDriven2me-<version>.dmg` from
    [Releases](https://github.com/Soublox/eyes-driven-2me/releases).
-2. Unzip it and move `EyesDriven2me.app` to `/Applications`.
+2. Open it and drag **Eyes Driven 2me** onto the **Applications** folder
+   (a `.zip` with the same app is also attached to every release).
 3. The first time, **right-click the app → Open** and confirm. Builds are not
    notarized yet, so Gatekeeper will warn about an unidentified developer.
 
@@ -98,7 +99,8 @@ Swift Testing.
 ```sh
 scripts/dev.sh build      # build (debug)
 scripts/dev.sh test       # run tests
-scripts/bundle.sh         # release .app + zip in dist/
+scripts/bundle.sh         # release .app + zip in dist/ (universal)
+scripts/make-dmg.sh       # drag-to-Applications .dmg from the bundled app
 ```
 
 > `swift test` needs Xcode or a swift.org toolchain — the plain Command Line
