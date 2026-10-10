@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Required so softprops/action-gh-release can create the release.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || true
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      - name: Bundle
+        env:
+          SWIFT_BUILD: swift build
+        run: VERSION="${GITHUB_REF_NAME#v}" scripts/bundle.sh
+
+      # NOTE: Notarization will slot in here later. Once we hold a
+      # "Developer ID Application" certificate we will:
+      #   1. Import the cert + notarytool credentials as repository secrets.
+      #   2. Run scripts/bundle.sh with SIGN_IDENTITY set to that identity.
+      #   3. `xcrun notarytool submit dist/*.zip --wait` and `xcrun stapler staple`.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
